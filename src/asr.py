@@ -25,14 +25,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-import librosa
 import numpy as np
 import torch
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
+from .audio import SAMPLE_RATE, load_audio
 
 CEB_TOKEN = "<|cebuano|>"
 CEB_TOKEN_ID = 51865
-SAMPLE_RATE = 16000
 MAX_LENGTH = 225
 
 CHECKPOINTS = {
@@ -143,13 +142,6 @@ def load(lang: str, device: str | None = None) -> ASRBundle:
     if lang == "ceb":
         return _build_ceb(repo, device, dtype)
     return _build_native(lang, repo, device, dtype)
-
-
-def load_audio(path: str) -> np.ndarray:
-    """Read any ffmpeg-readable file as 16 kHz mono float32."""
-    audio, _ = librosa.load(path, sr=SAMPLE_RATE, mono=True)
-    return audio
-
 
 def transcribe_file(path: str, lang: str, bundle: ASRBundle | None = None) -> str:
     """Transcribe a single audio file."""
