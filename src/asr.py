@@ -23,8 +23,6 @@ System dependency: ffmpeg.
 from __future__ import annotations
 
 import os
-import subprocess
-import tempfile
 from dataclasses import dataclass
 
 import librosa
@@ -149,20 +147,8 @@ def load(lang: str, device: str | None = None) -> ASRBundle:
 
 
 def load_audio(path: str) -> np.ndarray:
-    """Convert any ffmpeg-readable file to 16 kHz mono wav, then read it.
-
-    Same two steps as the evaluation notebook (ffmpeg resample, then
-    librosa.load on the wav), so the audio matches what the model was
-    evaluated on. Reading .m4a with librosa directly resamples differently.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        wav_path = os.path.join(tmp, "audio_16k.wav")
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", path, "-ar", str(SAMPLE_RATE), "-ac", "1", wav_path],
-            check=True,
-            capture_output=True,
-        )
-        audio, _ = librosa.load(wav_path, sr=SAMPLE_RATE, mono=True)
+    """Read any ffmpeg-readable file as 16 kHz mono float32."""
+    audio, _ = librosa.load(path, sr=SAMPLE_RATE, mono=True)
     return audio
 
 
