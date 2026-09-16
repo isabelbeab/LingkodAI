@@ -6,8 +6,8 @@ Philippine Languages Database.
 CEB is loaded differently from FIL and ENG. Cebuano is not one of Whisper's
 languages, so training added a custom `<|cebuano|>` token at id 51865 and
 resized the decoder's embedding matrix to match. The checkpoint carries its
-own tokenizer; the checks below stop loading if the tokenizer and weights
-ever disagree, since a mismatch would otherwise produce wrong text silently.
+own tokenizer. Loading fails if the tokenizer and embedding sizes disagree
+or if the custom token is not at the expected id.
 
 FIL and ENG use Whisper's native language tokens.
 
@@ -64,7 +64,7 @@ class ASRBundle:
     device: str
 
     def transcribe(self, audio: np.ndarray) -> str:
-        """Transcribe one clip, exactly as the evaluation notebook did."""
+        """Transcribe a single 16 kHz mono clip."""
         features = self.processor.feature_extractor(
             audio, sampling_rate=SAMPLE_RATE, return_tensors="pt"
         ).input_features.to(self.device, dtype=self.model.dtype)
@@ -77,8 +77,7 @@ class ASRBundle:
         )[0].strip()
 
     def unload(self) -> None:
-        """Free the model. Call this before loading another language on a
-        machine that can't hold two Whisper-medium models at once."""
+        """Release the model and free GPU memory, if applicable."""
         del self.model
         if self.device == "cuda":
             torch.cuda.empty_cache()
@@ -153,8 +152,7 @@ def load_audio(path: str) -> np.ndarray:
 
 
 def transcribe_file(path: str, lang: str, bundle: ASRBundle | None = None) -> str:
-    """One-shot convenience wrapper. Loads the model if one isn't supplied,
-    which is fine for a script but wasteful in a loop -- pass a bundle there."""
+    """Transcribe a single audio file."""
     own = bundle is None
     bundle = bundle or load(lang)
     try:
