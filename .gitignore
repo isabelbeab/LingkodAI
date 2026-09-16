@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- LingkodAI ---
+# Weights and data (weights live on the Hugging Face Hub)
+*.safetensors
+*.bin
+*.wav
+*.mp3
+*.m4a
+*.xlsx
+*.csv
+
+# No blanket *.pt: models/deeper_50chunks.pt is tracked on purpose.
