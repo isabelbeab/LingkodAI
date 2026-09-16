@@ -27,7 +27,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import WhisperFeatureExtractor, WhisperForConditionalGeneration
 
-from .asr import SAMPLE_RATE, load_audio
+from .audio import SAMPLE_RATE, load_audio
 
 LABELS = ("ceb", "fil", "eng")  # index order of the head's outputs
 
