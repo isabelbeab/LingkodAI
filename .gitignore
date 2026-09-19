@@ -228,3 +228,9 @@ __marimo__/
 *.csv
 
 # No blanket *.pt: models/deeper_50chunks.pt is tracked on purpose.
+
+# --- e2e integration ---
+reference/
+outputs/
+demo_audio/
+.env
