@@ -134,6 +134,17 @@ def pick_conversation_id(df, requested: str | None) -> str:
     return sorted(eligible.index)[0]
 
 
+def _readable(path: str) -> bool:
+    """True if the file exists and can be opened. An unreadable parent directory
+    (another user's home on JOJIE) raises PermissionError from exists(); treat
+    that as not found so the missing-files message prints."""
+    try:
+        with open(path, "rb"):
+            return True
+    except OSError:
+        return False
+
+
 def resolve_audio_path(raw_path: str, audio_root_map: dict[str, str]) -> str:
     for old, new in audio_root_map.items():
         if raw_path.startswith(old):
@@ -190,7 +201,7 @@ def main() -> int:
 
         raw_paths = sub[args.audio_col].tolist()
         audio_paths = [resolve_audio_path(p, audio_root_map) for p in raw_paths]
-        missing = [p for p in audio_paths if not Path(p).exists()]
+        missing = [p for p in audio_paths if not _readable(p)]
         if missing:
             print(f"ERROR: {lang} conversation {conv_id}: {len(missing)} audio file(s) not found:", file=sys.stderr)
             for p in missing:
