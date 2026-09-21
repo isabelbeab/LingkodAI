@@ -80,6 +80,25 @@ checking whether fp16 produces identical labels across the eval set.
 Changes this decision: the verification script reporting a mismatch, in which
 case drop sharing entirely and say so rather than working around it.
 
+**Verification result (run 2026-09-22 on JOJIE, CPU, fp32, `lingkod-e2e`).**
+The gate is cleared: all three fine-tunes carry the base encoder byte for byte.
+
+```text
+  name   encoder sha256         enc params    vocab   dec emb
+  ceb    c16520ef83cb19de...   307,216,384   51,866    51,866
+  fil    c16520ef83cb19de...   307,216,384   51,865    51,865
+  eng    c16520ef83cb19de...   307,216,384   51,865    51,865
+  base   c16520ef83cb19de...   307,216,384   51,865    51,865
+```
+
+The 51,866 vocab on ceb is the custom `<|cebuano|>` token at id 51865, a decoder
+change only. Models were fetched with a fine-grained read-only token (item 6).
+
+**Scope note.** The 1.2GB saving above assumes all three ASR models are held at
+once. `run_staged` loads only one, because the conversation language is locked
+by audio LID before ASR loads (`src/pipeline.py`, `asr.load(lid_result.lang)`).
+So sharing saves nothing in `staged` mode and matters only for `resident` mode.
+
 ---
 
 ## 3. Audio LID decides the language, text LID confirms it
@@ -171,7 +190,7 @@ byte-exact DS6 reproduction claim for charter-derived answers. Item 5 means the
 RAG generation configuration differs from Francis's evaluated run in one
 documented way. Both belong in the write-up as stated deviations.
 
-One item is a genuine verification gate: item 2 must not be implemented before
-`scripts/verify_shared_encoder.py` has been run and its output recorded.
+The item 2 verification gate was cleared on 2026-09-22 (output recorded in item
+2). Sharing is safe to implement, but see the scope note there.
 
 Everything else is decided.
