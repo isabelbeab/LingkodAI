@@ -1,0 +1,76 @@
+"""Stage 3 -- Routing decision and conversation language lock.
+
+Audio LID (stage 1) picks the ASR checkpoint and always wins on disagreement
+with text LID (stage 3's own model, src/lid_text.py). This ordering is forced,
+not chosen: ASR cannot run until a checkpoint is picked, and a checkpoint
+cannot be picked from a transcript that does not exist yet. Text LID's role is
+confirmation and diagnostics only: when it disagrees, the disagreement is
+recorded as `was_overridden`, but the final language is not changed and ASR is
+not re-run.
+
+LID decides the conversation's language exactly once, on turn 1. The decision
+is locked for every later turn; a wrong first-turn call misroutes the whole
+conversation by design -- there is no per-turn correction.
+
+Decided in DECISIONS.md #3, in the absence of Bea's Stage 1-3 multi-turn
+notebooks (not yet in reference/). Revisit only if those notebooks surface and
+show a different override rule.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+KNOWN_LANGS = ("ceb", "fil", "eng")
+
+
+@dataclass
+class RoutingResult:
+    """The one-time stage 3 decision, made from turn 1's audio LID label and
+    text LID label."""
+
+    pred_lang: str
+    text_lang: str | None
+    final_lang: str
+    was_overridden: bool
+
+
+def decide(pred_lang: str, text_lang: str | None) -> RoutingResult:
+    """Audio LID's label always wins; a disagreement with text LID is recorded
+    via `was_overridden`, not acted on. `text_lang` of None (an empty
+    transcript, see lid_text.TextLIDResult) never counts as a disagreement."""
+    if pred_lang not in KNOWN_LANGS:
+        raise ValueError(f"Unknown pred_lang {pred_lang!r}; expected one of {KNOWN_LANGS}")
+    if text_lang is not None and text_lang not in KNOWN_LANGS:
+        raise ValueError(f"Unknown text_lang {text_lang!r}; expected one of {KNOWN_LANGS} or None")
+
+    was_overridden = text_lang is not None and text_lang != pred_lang
+    return RoutingResult(
+        pred_lang=pred_lang,
+        text_lang=text_lang,
+        final_lang=pred_lang,
+        was_overridden=was_overridden,
+    )
+
+
+@dataclass
+class ConversationRouting:
+    """Locks a conversation's language from turn 1's RoutingResult.
+
+    Every stage past turn 1 -- MT, RAG, MT out, TTS, and even ASR checkpoint
+    selection for turn 2 onward -- reads `final_lang` from here rather than
+    re-running LID. LID decides the conversation's language exactly once."""
+
+    result: RoutingResult
+
+    @property
+    def final_lang(self) -> str:
+        return self.result.final_lang
+
+    @property
+    def was_overridden(self) -> bool:
+        return self.result.was_overridden
+
+    @classmethod
+    def from_first_turn(cls, pred_lang: str, text_lang: str | None) -> "ConversationRouting":
+        return cls(result=decide(pred_lang, text_lang))
