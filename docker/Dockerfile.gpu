@@ -1,0 +1,78 @@
+# LingkodAI full pipeline image: GPU required.
+#
+# STATUS: built and import-checked, NOT verified running inference in a
+# container. JOJIE is a shared JupyterHub and cannot run Docker, so GPU
+# verification happens there through the lingkod-e2e conda env, built from the
+# same pyproject.toml this image installs from. Say exactly that in the README;
+# do not imply this image has been proven end to end.
+#
+# Build (from the repo root; building needs no GPU):
+#   docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
+# Run (needs NVIDIA driver + nvidia-container-toolkit on the host):
+#   docker run --rm --gpus all -e HF_TOKEN=... -v lingkodai-hf:/data/hf lingkodai-gpu
+#
+# Weights are NOT baked in: roughly 45 GB across the seven models. They download
+# to /data/hf on first boot. Mount a volume there or every restart re-downloads.
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/data/hf \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# ffmpeg: src/audio.py shells out to it to resample any input to 16 kHz mono.
+# sox: qwen_tts warns on import without it.
+# git: some HF model repos resolve through git during download.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg sox git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# torch FIRST, from the PyTorch cu126 wheel index, not PyPI. The PyPI torch
+# wheel ships a different CUDA build and would either fail on the host driver or
+# silently fall back to CPU. cu126 matches JOJIE's lingkod-qwen3tts env
+# (torch 2.13.0+cu126, transformers 4.57.3).
+#
+# UNVERIFIED FROM THIS SIDE: the exact patch version available on that index was
+# not checkable when this file was written. Pin it to whatever JOJIE's
+# `pip freeze | grep -E '^torch'` reports, so the container and JOJIE run the
+# same build, then delete this note.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu126 \
+        torch torchaudio
+
+COPY pyproject.toml README.md ./
+# The gpu extra pulls qwen-tts==0.1.1, which pins transformers==4.57.3 and
+# accelerate==1.12.0. If pip reports a conflict here, that is a real finding:
+# surface it, do not loosen the qwen-tts pin to make the build pass.
+RUN pip install --no-cache-dir ".[gpu]"
+
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY models/ ./models/
+COPY data/prc_chunks/ ./data/prc_chunks/
+COPY data/init_set_ds6.json ./data/init_set_ds6.json
+
+# Same reason as the CPU image: the vendored frontend modules import each other
+# by bare top-level name and must not be edited.
+ENV PYTHONPATH=/app:/app/src/tts_frontend
+
+# Import check only. This runs at build time on a machine with no GPU, so it
+# must not touch CUDA or load any weights.
+RUN python -c "import torch, transformers; \
+import shared_domain_frontend, ceb_full_pipeline; \
+from lingkod_tts_utils import prep_tts_text; \
+import fasttext; \
+print('torch', torch.__version__, '| transformers', transformers.__version__); \
+print('imports OK (no GPU touched)')"
+
+RUN mkdir -p /data/hf /app/outputs
+
+# No CMD that starts work by itself: this image is driven by an explicit
+# command, so a stray `docker run` cannot kick off hours of GPU synthesis.
+# Print the environment the caller landed in instead.
+CMD ["python", "-c", "import torch; print('CUDA available:', torch.cuda.is_available()); print('arch list:', torch.cuda.get_arch_list() if torch.cuda.is_available() else 'n/a'); print('Run scripts/run_conversation.py --help for the CLI.')"]

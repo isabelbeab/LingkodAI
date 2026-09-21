@@ -1,0 +1,63 @@
+# Everything listed here is excluded from the build context, which is the set of
+# files Docker uploads to the daemon before running a Dockerfile. This matters
+# twice over: it keeps builds fast, and it makes it impossible to accidentally
+# COPY something private into an image layer. An image layer is forever, even if
+# a later layer deletes the file.
+
+# Source notebooks and team material. Never belongs in a published image.
+reference/
+outputs/
+*.ipynb
+
+# Secrets.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Version control and editor state.
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Python build and cache artefacts.
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Model weights and audio. Weights download at first boot; audio is either a
+# cloned research-corpus voice or PLD source material under a research-only
+# licence. Neither is baked into an image.
+*.safetensors
+*.bin
+*.wav
+*.mp3
+*.m4a
+*.xlsx
+*.csv
+data/hf/
+
+# The one deliberate exception: Bea's audio-LID head is small (2.8 MB) and is
+# tracked in git on purpose, so the GPU image needs it.
+!models/deeper_50chunks.pt
+
+# demo_audio/ is excluded by the *.wav rule above but the CPU Dockerfile copies
+# it. Re-include it explicitly: these are the pre-rendered demo conversations,
+# and the demo has nothing to show without them.
+!demo_audio/
+
+# Docs that do not affect a build. README.md is NOT here: setuptools reads it
+# while building package metadata, so excluding it breaks pip install.
+CLAUDE.md
+docs/

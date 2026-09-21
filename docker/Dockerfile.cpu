@@ -1,0 +1,84 @@
+# LingkodAI demo image: CPU only, no torch, no model weights.
+#
+# What runs in here:
+#   - the TTS text frontend, live (verbalizers, initialism spell-out, CEB
+#     segmentation and pause planning)
+#   - GlotLID text language identification, live (fastText on CPU is instant)
+#   - pre-rendered audio from recorded end-to-end conversations
+#
+# What does NOT run in here: audio LID, ASR, NLLB, the RAG LLM, Qwen3-TTS.
+# Those need a GPU. The app reaches them through GPU_BACKEND_URL if one exists.
+#
+# Build (from the repo root, note the -f path and the trailing dot):
+#   docker build -f docker/Dockerfile.cpu -t lingkodai-cpu .
+# Run:
+#   docker run --rm -p 8080:8080 -e APP_PASSWORD=changeme lingkodai-cpu
+
+FROM python:3.12-slim
+
+# PYTHONDONTWRITEBYTECODE keeps .pyc files out of the image layers.
+# PYTHONUNBUFFERED makes print() reach the Fly log immediately instead of
+# sitting in a buffer, which matters when the only debugging you get is logs.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# HF_HOME points the huggingface_hub cache at a writable path inside the
+# container. GlotLID's model_v3.bin (around 1.2 GB) downloads here on first use.
+# It is NOT baked into the image: that keeps the image small and keeps the
+# pinned-revision download honest.
+ENV HF_HOME=/data/hf
+
+WORKDIR /app
+
+# Dependency layer first, source second. Docker caches each instruction as a
+# layer and reuses it when nothing above changed, so editing app code does not
+# re-run pip install. README.md is copied because setuptools reads it during the
+# metadata build.
+COPY pyproject.toml README.md ./
+RUN pip install --no-cache-dir "." && pip install --no-cache-dir "streamlit>=1.32.0"
+
+COPY src/ ./src/
+COPY app/ ./app/
+COPY data/prc_chunks/ ./data/prc_chunks/
+COPY data/init_set_ds6.json ./data/init_set_ds6.json
+
+# demo_audio/ holds the pre-rendered conversations. It is gitignored (the voice
+# is a cloned research-corpus speaker under a research-only licence), so this
+# COPY needs the files staged locally before the build. Create the directory
+# even when empty so the build does not fail on a fresh clone.
+COPY demo_audio/ ./demo_audio/
+
+# The vendored TTS frontend modules import each other by bare top-level name
+# (import shared_domain_frontend, import ceb_respell_lab, ...). Putting their
+# directory on PYTHONPATH satisfies that without editing the vendored files,
+# which are copied verbatim from JOJIE and must not be touched.
+ENV PYTHONPATH=/app:/app/src/tts_frontend
+
+# Fail the build rather than ship an image whose frontend cannot import. The
+# nine vendored modules are a hard dependency: fil_prc_digit_verbalizer calls
+# tts._require_stt() at import time, so a missing lingkod_stt_utils.py only
+# shows up when someone opens the page.
+RUN python -c "import shared_domain_frontend, ceb_full_pipeline, ceb_segmentation; \
+from fil_prc_digit_verbalizer import verbalize_fil_prc; \
+from eng_prc_digit_verbalizer import verbalize_eng_prc; \
+from lingkod_tts_utils import prep_tts_text; \
+import fasttext; \
+print('frontend imports OK')"
+
+RUN mkdir -p /data/hf
+
+EXPOSE 8080
+
+# Streamlit defaults to 8501; Fly's http_service in fly.toml expects 8080.
+# headless=true stops it trying to open a browser. enableCORS=false and
+# enableXsrfProtection=false are needed behind Fly's proxy for the websocket
+# the Streamlit UI runs on.
+CMD ["streamlit", "run", "app/streamlit_app.py", \
+     "--server.port=8080", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true", \
+     "--server.enableCORS=false", \
+     "--server.enableXsrfProtection=false", \
+     "--browser.gatherUsageStats=false"]
