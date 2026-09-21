@@ -83,8 +83,17 @@ Reference-only, never a source of stage logic:
   evaluated configuration).
 - `reference/colab_streamlit_launcher.ipynb`: working Colab plus cloudflared recipe.
 - `reference/bea_stage4_mt_single_turn.ipynb`: single-turn variant.
-- `reference/ds6_multiturn_w_lid_backtranslated.xlsx`: outputs of the evaluated
-  Scenario 2 run, 2,235 rows. The golden reference for tests.
+- `reference/reference/DS6_augmented.xlsx`: outputs of the evaluated
+  Scenario 2 run, 2,235 rows, `status` all `ok`. The golden reference for
+  tests. Arrived under this path/name, not the
+  `ds6_multiturn_w_lid_backtranslated.xlsx` name used elsewhere in this file
+  and in DECISIONS.md; same shape (row count, `clip_id`, `final_lang`,
+  `rag_answer_native`, etc.), confirmed against `scripts/build_init_set.py`'s
+  and `scripts/golden_check.py`'s expectations. It carries extra evaluation
+  columns beyond those (`utmos22`, `tts_rt_wer`, `judge_hyp`,
+  `roundtrip_bleu`/`chrf`, `verbalized_text`) that neither script reads --
+  "augmented" per HK, no claim that the columns the pipeline does use were
+  altered from the original DS6 run.
 
 ## MT settings, both directions (resolved 2026-09-19, verified against both notebooks)
 
