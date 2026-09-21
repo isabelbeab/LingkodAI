@@ -188,3 +188,32 @@ def test_synthesize_turn_catches_raise_and_keeps_text_path(tmp_path):
     assert result.failure_reason is not None
     assert result.id == "turn-2"
     assert result.lang == "ceb"
+
+
+# --- reference clip config (DECISIONS.md #8) ---------------------------
+
+
+def test_find_ref_clip_finds_nested_and_raises_when_missing(tmp_path):
+    nested = tmp_path / "ENG" / "1904"
+    nested.mkdir(parents=True)
+    clip = nested / tts.REF_CLIP_FILENAMES["eng"]
+    clip.write_bytes(b"x")
+    assert tts.find_ref_clip(tmp_path, tts.REF_CLIP_FILENAMES["eng"]) == clip
+    with pytest.raises(FileNotFoundError, match=str(tmp_path.resolve())):
+        tts.find_ref_clip(tmp_path, tts.REF_CLIP_FILENAMES["fil"])
+
+
+def test_find_ref_clip_ambiguous_raises(tmp_path):
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / tts.REF_CLIP_FILENAMES["ceb"]).write_bytes(b"x")
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        tts.find_ref_clip(tmp_path, tts.REF_CLIP_FILENAMES["ceb"])
+
+
+def test_ref_text_config_locked():
+    assert tts.REF_CLIP_FILENAMES["fil"].endswith("0443.wav")
+    assert "siyete" in tts.REF_TEXT_CONFIG["ceb"]["ref_text"]
+    assert tts.REF_TEXT_CONFIG["eng"]["language"] == "english"
+    assert tts.REF_TEXT_CONFIG["fil"]["language"] is None
+    assert tts.REF_TEXT_CONFIG["ceb"]["language"] is None

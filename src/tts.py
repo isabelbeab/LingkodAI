@@ -47,7 +47,6 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import torch
-from huggingface_hub import hf_hub_download
 
 # tts_frontend modules import each other by top-level name (vendored verbatim
 # from JOJIE, never edited -- see src/tts_frontend/VENDORED.md), so this
@@ -67,16 +66,66 @@ MAX_NEW_TOKENS_PRIMARY = 4096
 MAX_NEW_TOKENS_FALLBACK = 2048
 REF_PAD_SILENCE_SEC = 0.5
 
-# Locked reference clips, one per language. Filenames only -- the actual
-# audio bytes and ref_config.json (ref_text + language, copied verbatim from
-# the notebook's REF_CONFIG) live in the private HF repo named by
-# TTS_REF_REPO and are never committed; the clips are PLD speaker audio
-# under a research-only CC-BY-NC licence.
+# Locked reference clips, one per language. Filenames only: the audio is PLD
+# speaker audio under a research-only CC-BY-NC licence and is never committed.
+# It is read from local disk under TTS_REF_DIR (DECISIONS.md #8).
 REF_CLIP_FILENAMES = {
     "eng": "1904.141120.022212.0152.wav",
     "fil": "0052.110908.020820.0443.wav",  # 0443, not 0433
     "ceb": "0233.111026.023506.0490.wav",
 }
+
+# ref_text and language, copied verbatim from REF_CONFIG in
+# reference/TTS files/LingkodAI_DS6_DS7_Synthesis.ipynb (Cell 5). The CEB
+# ref_text carries a deliberate manual substitution ("siyete"); keep it.
+REF_TEXT_CONFIG = {
+    "eng": {
+        "ref_text": (
+            "a number of stories in the collection were excluded due to loss of the "
+            "original manuscript sent to various authors at the time were plotted on "
+            "the first quarter storm rust no shed on the moment of separation and "
+            "the dry river at the foot of the mountain"
+        ),
+        "language": "english",
+    },
+    "fil": {
+        "ref_text": (
+            "ngunit ang alimango'y hindi maaaring umakyat sa punongkahoy ang "
+            "pariralang ito ay magiging lalong tama sa pagong sa aming paniwala "
+            "ang alimangong may sipit at mga paa ay maaaring umakyat na katulad "
+            "ng matsing madaling naaakyat ng alimango ang alin mang bato moog at "
+            "iba pa"
+        ),
+        "language": None,
+    },
+    "ceb": {
+        "ref_text": (
+            "kini ang nalatid sa kamanduan nga gipakanaog kagahapon sa hapon ni "
+            "regional trial court executive judge meinrado paredes human "
+            "gisumiter sa criminal investigation and detection group siyete ang "
+            "nakuha nilang mga ebidensya sa giingong suspek sa kaso ni pique "
+            "didto sa barangay inayagan dakbayan sa naga"
+        ),
+        "language": None,
+    },
+}
+
+
+def find_ref_clip(ref_dir: Path, filename: str) -> Path:
+    """Locate one locked reference clip under ref_dir, at any depth.
+
+    Raises with the resolved directory if it is missing or ambiguous; no
+    silent fallback to another clip.
+    """
+    ref_dir = Path(ref_dir).expanduser()
+    if not ref_dir.is_dir():
+        raise FileNotFoundError(f"TTS_REF_DIR does not exist or is not a directory: {ref_dir.resolve()}")
+    hits = sorted(p for p in ref_dir.rglob(filename) if p.is_file())
+    if not hits:
+        raise FileNotFoundError(f"reference clip {filename} not found under {ref_dir.resolve()}")
+    if len(hits) > 1:
+        raise RuntimeError(f"reference clip {filename} is ambiguous under {ref_dir.resolve()}: {[str(h) for h in hits]}")
+    return hits[0]
 
 
 def get_device() -> str:
@@ -130,14 +179,12 @@ class TTSBundle:
 
 
 def load(
-    ref_repo_id: str | None = None,
-    token: str | None = None,
+    ref_dir: str | Path | None = None,
     device: str | None = None,
 ) -> TTSBundle:
-    """Download the locked reference clips + ref_config.json from the private
-    HF repo named by TTS_REF_REPO, load the model, and confirm the sample
-    rate with a short warm-up clone -- same sequence as the notebook's model
-    load cell.
+    """Find the locked reference clips under TTS_REF_DIR, load the model, and
+    confirm the sample rate with a short warm-up clone -- same sequence as
+    the notebook's model load cell.
 
     qwen_tts is imported here, not at module level: its torchaudio
     dependency pulls in a CUDA extension that only loads on a real GPU
@@ -146,25 +193,20 @@ def load(
     """
     from qwen_tts import Qwen3TTSModel
 
-    ref_repo_id = ref_repo_id or os.environ.get("TTS_REF_REPO")
-    if not ref_repo_id:
+    ref_dir = ref_dir or os.environ.get("TTS_REF_DIR")
+    if not ref_dir:
         raise ValueError(
-            "TTS_REF_REPO is not set. The locked reference clips and "
-            "ref_config.json live in a private HF repo; see .env.example."
+            "TTS_REF_DIR is not set. It must point at a directory holding the three "
+            "locked reference clips (searched recursively); see .env.example."
         )
-    token = token or os.environ.get("HF_TOKEN")
     device = device or get_device()
-
-    config_path = hf_hub_download(repo_id=ref_repo_id, filename="ref_config.json", token=token)
-    with open(config_path, encoding="utf-8") as fh:
-        raw_config = json.load(fh)
 
     ref_config: dict[str, dict] = {}
     for lang, filename in REF_CLIP_FILENAMES.items():
-        clip_path = hf_hub_download(repo_id=ref_repo_id, filename=filename, token=token)
-        entry = raw_config[lang]
+        clip_path = find_ref_clip(Path(ref_dir), filename)
+        entry = REF_TEXT_CONFIG[lang]
         ref_config[lang] = {
-            "ref_audio": _pad_ref_audio_with_silence(Path(clip_path)),
+            "ref_audio": _pad_ref_audio_with_silence(clip_path),
             "ref_text": entry["ref_text"],
             "language": entry["language"],
         }

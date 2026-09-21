@@ -183,6 +183,32 @@ This is not a code blocker. Nothing in the build waits on it.
 
 ---
 
+## 8. TTS reference clips load from local disk, not a private HF repo
+
+CLAUDE.md describes the clips and `ref_config.json` as coming from a private HF
+repo named by `TTS_REF_REPO`. That repo was never created; the variable was
+invented in `.env.example`. The GPU pipeline only runs on JOJIE, where the
+locked clips already sit on disk, and uploading CC-BY-NC research audio to a
+personal HF account would gain nothing. This entry supersedes the CLAUDE.md
+wording (see the precedence rule under Open items there).
+
+**Decision.** `TTS_REF_REPO` is dropped. `src/tts.py` reads the three locked
+clips from the directory in `TTS_REF_DIR`, finding each by filename at any depth
+and raising with the resolved path if a clip is missing or ambiguous. `ref_text`
+and `language` are constants in `src/tts.py` (`REF_TEXT_CONFIG`), copied verbatim
+from `REF_CONFIG` in the synthesis notebook, including the deliberate "siyete"
+substitution in the CEB text. The 0.5 s trailing-silence padding is unchanged.
+The locked clip filenames are unchanged.
+
+The clip location is not hard-coded because two layouts have been claimed. The
+notebook used `<DEMO_DIR>/ref_audio/` (flat); the other is
+`data/audio_preprocessing/{ENG,FIL,CEB}/<id>/`. Recursive lookup by filename
+covers both. Verify on JOJIE with `find` before the golden check.
+
+Changes this decision: the team actually creating a shared reference repo.
+
+---
+
 ## 7. Nothing above blocks Tuesday
 
 Two items affect what we can claim rather than what we can ship. Item 4 means no
