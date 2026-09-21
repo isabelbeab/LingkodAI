@@ -227,6 +227,11 @@ exports that point `asr.py` at those copies. The script raises unless the patche
 tokenizer's special-token ids match base `openai/whisper-medium` and `<|cebuano|>`
 sits at id 51865. Tokens are unchanged; only the config key differs.
 
+Observed on JOJIE: text tokens are identical to base for fil, and the saved
+prefix differs (fil and eng carry `<|transcribe|>`, id 50359, base does not).
+That is expected, because `asr.py` sets language and task itself, so the check
+compares text tokens and reports the prefix rather than comparing it.
+
 This is a deviation from loading straight from the Hub. The proper fix is for
 Bea to re-save the tokenizers with the pinned version; ask when she is back.
 

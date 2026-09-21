@@ -15,8 +15,9 @@ prints the exports that point asr.py at them. See DECISIONS.md #9.
     python scripts/patch_asr_tokenizers.py --out outputs/asr_patched
 
 Each patched tokenizer is checked before it is trusted: the special-token ids
-must match base openai/whisper-medium (ceb: the shared ids, plus <|cebuano|> at
-51865). Any mismatch raises.
+must match base openai/whisper-medium, a sample sentence must tokenize to the
+same text tokens, and for ceb <|cebuano|> must sit at 51865. Prefix tokens are
+reported, not compared. Any mismatch raises.
 """
 
 from __future__ import annotations
@@ -84,9 +85,13 @@ def verify(lang: str, patched: Path, base_tok) -> None:
         got = tok.convert_tokens_to_ids(CEB_TOKEN)
         if got != CEB_TOKEN_ID:
             raise RuntimeError(f"ceb: {CEB_TOKEN} is at id {got}, expected {CEB_TOKEN_ID}")
+    # Text tokens only. The saved prefix tokens legitimately differ from base
+    # (fil and eng carry <|transcribe|>, 50359); asr.py sets language and task
+    # itself when it builds the processor.
     sample = "ngunit ang alimango'y hindi maaaring umakyat sa punongkahoy"
-    if lang != "ceb" and tok(sample).input_ids != base_tok(sample).input_ids:
-        raise RuntimeError(f"{lang}: tokenizing a sample sentence differs from {BASE_REPO}")
+    if tok(sample, add_special_tokens=False).input_ids != base_tok(sample, add_special_tokens=False).input_ids:
+        raise RuntimeError(f"{lang}: text tokens for a sample sentence differ from {BASE_REPO}")
+    print(f"  {lang}: saved prefix {tok.prefix_tokens} (base {base_tok.prefix_tokens})")
     print(f"  {lang}: verified ({len(tok)} tokens, {len(base_specials)} base special tokens match)")
 
 
