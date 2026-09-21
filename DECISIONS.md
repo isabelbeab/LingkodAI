@@ -209,6 +209,32 @@ Changes this decision: the team actually creating a shared reference repo.
 
 ---
 
+## 9. ASR tokenizers are loaded from patched local copies
+
+Found on JOJIE, 2026-09-22, during the first golden-check run. All three
+`beabucayan/lingkodai-whisper-*` repos store `extra_special_tokens` in
+`tokenizer_config.json` as a list (ceb 1 entry, fil and eng 107 each).
+`transformers` 4.57.3, which `qwen-tts` pins and we may not change, expects a
+dict and raises `AttributeError: 'list' object has no attribute 'keys'` when
+`asr.load` builds the processor. The earlier encoder check missed it because it
+loaded weights only.
+
+**Decision.** `src/asr.py` is Bea's and stays untouched. It already reads
+`ASR_CEB`, `ASR_FIL` and `ASR_ENG`, so `scripts/patch_asr_tokenizers.py` builds a
+local copy of each checkpoint (weights symlinked from the HF cache, no second
+download) with the list moved to `additional_special_tokens`, and prints the
+exports that point `asr.py` at those copies. The script raises unless the patched
+tokenizer's special-token ids match base `openai/whisper-medium` and `<|cebuano|>`
+sits at id 51865. Tokens are unchanged; only the config key differs.
+
+This is a deviation from loading straight from the Hub. The proper fix is for
+Bea to re-save the tokenizers with the pinned version; ask when she is back.
+
+Changes this decision: Bea pushing repaired tokenizer configs, after which the
+ASR_* overrides can be dropped.
+
+---
+
 ## 7. Nothing above blocks Tuesday
 
 Two items affect what we can claim rather than what we can ship. Item 4 means no
