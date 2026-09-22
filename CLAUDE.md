@@ -263,11 +263,11 @@ reasoning behind each resolved item below and what would change it. Where
 
 Resolved (2026-09-19, see `DECISIONS.md`):
 
-1. ~~Routing~~ Decided in `DECISIONS.md` #3: audio LID (turn 1 only) picks the
-   ASR checkpoint and always wins on disagreement with text LID; the
-   disagreement is recorded as `was_overridden` but ASR is not re-run and
-   `final_lang` is not changed. Implemented in `src/routing.py`. Revisit only
-   if Bea's Stage 1 to 3 notebooks surface and show a different rule.
+1. ~~Routing~~ Decided in `DECISIONS.md` #3, superseded 2026-09-22 per Bea's
+   direct review: audio LID (turn 1 only) still picks the ASR checkpoint (that
+   ordering is forced), but text LID wins on disagreement for `final_lang`;
+   the disagreement is still recorded as `was_overridden` and ASR is still not
+   re-run. Implemented in `src/routing.py`.
 2. ~~Which `charter_chunks.json` produced DS6~~ Decided in `DECISIONS.md` #4:
    use Francis's zip copy (`charter_chunks (7).json`, -> `reference/` as
    `charter_chunks_v7.json` with a note), for provenance consistency with the

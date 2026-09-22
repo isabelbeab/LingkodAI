@@ -101,7 +101,25 @@ So sharing saves nothing in `staged` mode and matters only for `resident` mode.
 
 ---
 
-## 3. Audio LID decides the language, text LID confirms it
+## 3. Audio LID picks the ASR checkpoint, text LID decides final_lang
+
+**Superseded 2026-09-22.** Original decision (below, kept for the record) had
+audio LID's label win `final_lang` on disagreement. Bea reviewed this and said
+that's wrong: text LID should win `final_lang` on disagreement, since it runs
+on the actual transcript, which audio LID never sees. Audio LID still has to
+pick the ASR checkpoint for turn 1 -- that ordering is still forced, ASR
+cannot run before a checkpoint is picked and no transcript exists yet to pick
+one from -- but the checkpoint choice no longer also decides `final_lang`
+when the two disagree. ASR is still not re-run under the corrected language.
+This also explains a real symptom: in the 2026-09-22 golden check, the ceb
+conversation's audio LID mispredicted `eng` (0.769) while text LID correctly
+said `ceb` (0.714); under the old rule `eng` won and the whole conversation
+was misrouted. Under this rule it would have locked to `ceb` correctly.
+Implemented in `src/routing.py` (`decide()`), tests updated in
+`tests/test_routing.py`. Golden check has not yet been re-run against this
+fix; that's the way to confirm it end to end.
+
+Original decision (2026-09-19), for the record:
 
 Bea's Stage 1 to 3 multi-turn notebooks are not in hand, so the exact override
 rule between audio LID and text LID is not reproducible from source. Decided as
@@ -124,8 +142,9 @@ individual turns.
 Keep this rule in `src/routing.py` and nowhere else, so that if Bea's notebooks
 later show a different override it is one function to change.
 
-Changes this decision: Bea's Stage 1 to 3 notebooks arriving and showing a
-re-run on disagreement.
+Changes this decision: superseded 2026-09-22 by Bea's direct review (see note
+above) rather than the notebooks themselves surfacing -- the notebooks are
+still not in `reference/`, so this is Bea's word, not a reproduced source.
 
 ---
 
