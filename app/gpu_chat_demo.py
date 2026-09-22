@@ -1,32 +1,35 @@
-"""JOJIE-only live demo for the presentation. GPU required, torch/transformers
-imported directly (unlike app/streamlit_app.py, which must stay torch-free
-so the CPU/Fly image can build without them).
+"""Presentation-only live demo. GPU required, torch/transformers imported
+directly (unlike app/streamlit_app.py, which must stay torch-free so the
+CPU/Fly image can build without them).
 
 NOT part of docker/Dockerfile.cpu or docker/Dockerfile.gpu, not referenced by
-fly.toml. This is presentation tooling: run directly on JOJIE with
-`streamlit run app/gpu_chat_demo.py`, tunneled out with cloudflared (see
-reference/colab_streamlit_launcher.ipynb for the exact tunnel command this
-mirrors), and torn down after use. Never describe this as a fourth shipped
+fly.toml. Run directly on a real GPU host with `streamlit run
+app/gpu_chat_demo.py`, tunneled out with cloudflared (see
+reference/colab_streamlit_launcher.ipynb for the tunnel pattern this
+mirrors), torn down after use. Never describe this as a fourth shipped
 artifact.
 
 Text in, stages 4-6 only (MT in -> RAG -> MT out). No audio LID, ASR, or TTS
 -- no audio in or out anywhere in this file, by design (HK: "we can skip ASR
 and TTS if we really can't... at the very least we should try to show the
-text chatbot component").
+text chatbot component"). No private HF_TOKEN-gated checkpoints needed
+either: NLLB, RAG's Harrier embedding + Qwen3-4B-Instruct generation model,
+and GlotLID are all public.
 
-Per-question, not per-conversation: loads each stage's model, uses it, and
-unloads it (src/mt.py's and src/rag.py's existing load()/unload(), unchanged)
-for every single question, the same staged pattern src/pipeline.py's
-run_staged already proves fits on JOJIE's 11 GB card -- just scoped to one
-question's three stages instead of a whole conversation's five phases. This
-trades a per-question wait (model load from a warm HF cache) for near
-certainty that it fits, rather than gambling on NLLB and RAG's generation
-model coexisting resident (unmeasured, likely tight to over budget on 11 GB:
-NLLB fp16 alone is 6.7 GB).
+RESIDENT, not staged: mt.load() and rag.load() each run once per server
+process (st.cache_resource) and stay loaded, rather than loading/unloading
+per question. First tried staged (load/use/unload every question) on
+JOJIE's 11GB card, where residency was unmeasured and likely too tight
+(NLLB fp16 alone is 6.7GB); that also meant a multi-minute wait per
+question, which -- combined with JOJIE's shared-JupyterHub session drops --
+broke a live cloudflared tunnel outright (see DECISIONS around 2026-09-22).
+On a large-VRAM host (Colab A100, 85GB) residency is comfortable, and
+loading once removes the per-question wait that made the tunnel fragile in
+the first place.
 
-No password gate: unlike the CPU demo, nothing here touches the cloned
-research-speaker voice (no TTS at all), and the RAG knowledge base is public
-PRC citizen's-charter content. Nothing here needs gating.
+No password gate: nothing here touches the cloned research-speaker voice
+(no TTS at all), and the RAG knowledge base is public PRC citizen's-charter
+content. Nothing here needs gating.
 """
 
 from __future__ import annotations
@@ -49,28 +52,39 @@ def load_text_lid() -> lid_text.TextLID:
     return lid_text.load()
 
 
+@st.cache_resource(show_spinner="Loading NLLB (translation, ~6.7GB, stays resident)...")
+def load_mt() -> mt.MTBundle:
+    return mt.load()
+
+
+@st.cache_resource(show_spinner="Loading RAG (retrieval + generation, stays resident)...")
+def load_rag() -> rag.RAGBundle:
+    return rag.load()
+
+
 def print_environment() -> None:
     import torch
     import transformers
 
-    st.caption(
-        f"torch {torch.__version__} | transformers {transformers.__version__} | "
-        f"GPU {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none (CPU only)'}"
-    )
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        gpu_note = f"{torch.cuda.get_device_name(0)}, {vram_gb:.0f}GB"
+    else:
+        gpu_note = "none (CPU only)"
+    st.caption(f"torch {torch.__version__} | transformers {transformers.__version__} | GPU {gpu_note}")
 
 
 def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
-    """One question through stages 4-6, loading/using/unloading each stage's
-    model in turn. Returns a dict of everything worth showing; raises only
-    if a stage itself raises unexpectedly (caught by the caller)."""
+    """One question through stages 4-6, using the resident models loaded
+    once at server startup. Returns a dict of everything worth showing;
+    raises only if a stage itself raises unexpectedly (caught by the caller).
+    """
     result: dict = {"native_query": text, "final_lang": lang}
+    mt_bundle = load_mt()
+    rag_bundle = load_rag()
 
     with st.status("Translating to English...", expanded=False) as status:
-        mt_bundle = mt.load()
-        try:
-            mt_in = mt.translate_to_english(mt_bundle, [mt.TurnText(id=0, text=text, lang=lang)])[0]
-        finally:
-            mt_bundle.unload()
+        mt_in = mt.translate_to_english(mt_bundle, [mt.TurnText(id=0, text=text, lang=lang)])[0]
         if not mt_in.ok:
             status.update(label="MT in failed", state="error")
             raise RuntimeError(f"MT in failed: {mt_in.failure_reason}")
@@ -78,11 +92,7 @@ def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
         status.update(label=f"Translated to English ({mt_in.translate_time_sec:.1f}s)", state="complete")
 
     with st.status("Retrieving and generating answer...", expanded=False) as status:
-        rag_bundle = rag.load()
-        try:
-            rag_result = rag.answer_turn(rag_bundle, mt_in.text, history)
-        finally:
-            rag_bundle.unload()
+        rag_result = rag.answer_turn(rag_bundle, mt_in.text, history)
         result["resolved_query"] = rag_result.resolved_query
         result["was_dependent"] = rag_result.was_dependent
         result["english_answer"] = rag_result.answer
@@ -90,13 +100,9 @@ def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
         status.update(label="Answer generated", state="complete")
 
     with st.status("Translating answer back...", expanded=False) as status:
-        mt_bundle = mt.load()
-        try:
-            mt_out = mt.translate_from_english(
-                mt_bundle, [mt.TurnText(id=0, text=rag_result.answer, lang=lang)]
-            )[0]
-        finally:
-            mt_bundle.unload()
+        mt_out = mt.translate_from_english(
+            mt_bundle, [mt.TurnText(id=0, text=rag_result.answer, lang=lang)]
+        )[0]
         if not mt_out.ok:
             status.update(label="MT out failed", state="error")
             raise RuntimeError(f"MT out failed: {mt_out.failure_reason}")
@@ -107,12 +113,13 @@ def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
 
 
 def main() -> None:
-    st.set_page_config(page_title="LingkodAI (live, JOJIE)", page_icon="🇵🇭", layout="wide")
-    st.title("LingkodAI -- live text chatbot (JOJIE)")
+    st.set_page_config(page_title="LingkodAI (live)", page_icon="🇵🇭", layout="wide")
+    st.title("LingkodAI -- live text chatbot")
     st.caption(
         "Presentation-only live demo. Text in, real translation + retrieval + "
-        "generation + translation back -- no audio anywhere. Each question "
-        "loads and unloads its own models, so expect a real wait per turn."
+        "generation + translation back -- no audio anywhere. Models load once "
+        "at startup and stay resident, so only the first question after a "
+        "fresh start is slow."
     )
     print_environment()
 
@@ -126,6 +133,11 @@ def main() -> None:
             st.session_state.history = []
             st.session_state.display_history = []
             st.rerun()
+        if st.button("Warm up models now"):
+            load_mt()
+            load_rag()
+            load_text_lid()
+            st.success("Loaded and resident.")
 
     for turn in st.session_state.display_history:
         with st.chat_message("user"):
