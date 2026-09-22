@@ -6,7 +6,68 @@ build-backend = "setuptools.build_meta"
 name = "lingkodai"
 version = "0.1.0"
 requires-python = ">=3.10"
+description = "Multilingual speech-to-speech pipeline for Philippine PRC citizen information (CEB / FIL / ENG)"
+
+# Base dependencies are the CPU-only, text-only core: the TTS text frontend,
+# text language identification, and the chunk loader. Nothing here pulls in
+# torch. This is what the CPU demo image installs, and it is why that image
+# stays around 200 MB.
+#
+# fasttext-numpy2, NOT fasttext or fasttext-wheel: upstream predict() calls
+# np.array(probs, copy=False), which NumPy 2 rejects. fasttext-numpy2 ships the
+# one-line fix (np.asarray) and keeps the import name "fasttext", so
+# src/lid_text.py needs no change.
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.0",
+    "fasttext-numpy2>=0.10.4",
+    "huggingface_hub>=0.26",
+]
+
+[project.optional-dependencies]
+
+# The Streamlit demo served by docker/Dockerfile.cpu. Still no torch.
+app = [
+    "streamlit>=1.32.0",
+]
+
+# The full pipeline. Install with: pip install -e ".[gpu]"
+#
+# torch and torchaudio are deliberately ABSENT. Their correct build differs per
+# machine (cu126 on JOJIE, whatever the Colab runtime ships, CPU wheels on a
+# laptop), and pinning a PyPI torch here would install the wrong CUDA build.
+# Install torch first, then this extra. docker/Dockerfile.gpu does exactly that.
+#
+# transformers is also deliberately absent: qwen-tts==0.1.1 pins it to
+# ==4.57.3 along with accelerate==1.12.0. Listing it again risks a silent
+# conflict. If pip ever reports a transformers conflict here, that is a real
+# finding to surface, not something to resolve by loosening the qwen-tts pin.
+gpu = [
+    "qwen-tts==0.1.1",
+    "sentencepiece>=0.2.0",
+    "protobuf>=4.25",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "sentence-transformers>=5.0",
+    "scikit-learn>=1.4",
+    "qdrant-client>=1.12",
+    "bitsandbytes>=0.45",
+    "openpyxl>=3.1",
+]
+
+# Golden check and scoring only.
+eval = [
+    "sacrebleu>=2.4",
+    "jiwer>=3.0",
+]
+
+dev = [
+    "pytest>=8.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

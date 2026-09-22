@@ -1,0 +1,68 @@
+# Fly.io config for the LingkodAI demo (CPU image only).
+#
+# Fly retired GPU machines on 2026-08-01, so there is no GPU size to request
+# here and no point adding one. This app runs the text frontend and text
+# language identification live on CPU, and serves pre-rendered audio. When a GPU
+# backend exists elsewhere (RunPod, Modal), point GPU_BACKEND_URL at it and the
+# same app becomes live end to end with no code change.
+#
+# First deploy:
+#   fly launch --no-deploy --copy-config --name lingkodai-demo
+#   fly secrets set APP_PASSWORD=pick-a-real-one
+#   fly deploy
+# Later deploys:
+#   fly deploy
+# Logs:
+#   fly logs
+
+app = "lingkodai-demo"
+primary_region = "sin"   # Singapore, closest Fly region to Manila
+
+[build]
+  dockerfile = "docker/Dockerfile.cpu"
+
+[env]
+  # Non-secret defaults. APP_PASSWORD and GPU_BACKEND_URL are NOT set here:
+  # anything in this block is committed to git and visible to anyone with the
+  # repo. Secrets go through `fly secrets set`, which stores them encrypted and
+  # injects them at runtime.
+  HF_HOME = "/data/hf"
+  LINGKODAI_MODE = "demo"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Scale to zero when nobody is using it. An idle demo then costs nothing, and
+  # the next visitor's request starts the machine again (a cold start of a few
+  # seconds). On older Fly CLI versions this field is a boolean (true) rather
+  # than the string "stop"; if `fly deploy` rejects it, that is the fix.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # Streamlit keeps one websocket per browser tab, so a single visitor holds a
+  # connection for the whole session. Concurrency is measured in connections
+  # rather than requests for that reason.
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+# GlotLID's model_v3.bin (around 1.2 GB) downloads on first use. Without a
+# volume it re-downloads every cold start, which is slow and wasteful. Create it
+# once with:
+#   fly volumes create lingkodai_data --region sin --size 3
+# then uncomment this block and redeploy. Leave it commented for the first
+# deploy so nothing blocks on a volume that does not exist yet.
+# [[mounts]]
+#   source = "lingkodai_data"
+#   destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Raised from 1gb 2026-09-22: the demo OOM-crash-looped loading GlotLID
+  # (~1.2 GB model) on first use, confirmed via `fly logs` ("Out of memory:
+  # Killed process ... streamlit"). This is the fix this comment already
+  # called for.
+  memory = "2gb"
