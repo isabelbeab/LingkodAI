@@ -18,24 +18,28 @@ same as the original version of this file.
 Two input modes:
   - Text: stages 4-6 only (MT in -> RAG -> MT out), typed text in, text
     answer back. This is the original version of this file, unchanged.
-  - Audio: stages 2 + 4-7 (ASR, MT in, RAG, MT out, TTS), a pre-staged
-    audio file selected from a dropdown in, transcript + text answer +
-    synthesized answer audio back. No audio LID (stage 1) -- language is
-    picked manually in the dropdown's language selector, same
+  - Audio: stages 2 + 4-7 (ASR, MT in, RAG, MT out, TTS), an audio question
+    in (either a pre-staged file from a dropdown, or a live microphone
+    recording via st.audio_input -- caller's choice, see below), transcript
+    + text answer + synthesized answer audio back. No audio LID (stage 1)
+    -- language is picked manually in a language selector either way, same
     simplification the text mode already makes for GlotLID (there it's
-    optional auto-detect; here there is no live audio to run LID on
-    ahead of time in a way that would be safe to skip re-verifying, so
-    it is manual only). This also avoids needing to transfer
+    optional auto-detect; here there is no live audio to run LID on ahead
+    of time in a way that would be safe to skip re-verifying, so it is
+    manual only). This also avoids needing to transfer
     models/deeper_50chunks.pt (Bea's file) to this host.
 
-The audio dropdown is deliberately not a live microphone recorder
-(st.audio_input): a dropdown of known-good files is lower-risk for a live
+Audio mode's source is a choice, not a fixed decision: a dropdown of
+known-good pre-staged files is the lower-risk default for a live
 presentation (no room noise, no mic permission prompts, no surprise silent
-takes) while the actual compute -- ASR, translation, retrieval, generation,
-translation back, synthesis -- still runs for real, live, when the button
-is clicked. Point DEMO_INPUT_AUDIO_DIR at a folder of audio files (a
-mounted Google Drive folder works well) and the dropdown lists whatever is
-in it -- add a new demo question by adding a file to Drive, no code change.
+takes), and st.audio_input (live microphone recording, WAV bytes written to
+a temp file before running through the same pipeline) is there for a
+genuinely live moment when that risk is acceptable. Either way the actual
+compute -- ASR, translation, retrieval, generation, translation back,
+synthesis -- runs for real, live, when the button is clicked. Point
+DEMO_INPUT_AUDIO_DIR at a folder of audio files (a mounted Google Drive
+folder works well) and the dropdown lists whatever is in it -- add a new
+demo question by adding a file to Drive, no code change.
 
 Resident where it matters, lazy where it doesn't: mt.load() and rag.load()
 load once at first use and stay resident (st.cache_resource), matching the
@@ -65,6 +69,7 @@ from __future__ import annotations
 
 import io
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -309,52 +314,70 @@ def main() -> None:
 
     else:  # Audio mode
         lang_choice = st.radio("Language", ["Cebuano", "Filipino", "English"], horizontal=True, key="audio_lang")
-        files = discover_input_audio_files()
+        audio_source = st.radio(
+            "Audio source", ["Pre-recorded file", "Record with microphone"], horizontal=True, key="audio_source"
+        )
 
-        if not files:
-            st.info(
-                "No input audio files found. Set DEMO_INPUT_AUDIO_DIR to a folder "
-                "of audio files (a mounted Google Drive folder works well) and "
-                "restart this app."
-            )
-        else:
-            filename = st.selectbox("Question audio", sorted(files))
-            if st.button("Ask", type="primary"):
-                lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
+        audio_path: Path | None = None
+        audio_label: str | None = None
+
+        if audio_source == "Pre-recorded file":
+            files = discover_input_audio_files()
+            if not files:
+                st.info(
+                    "No input audio files found. Set DEMO_INPUT_AUDIO_DIR to a folder "
+                    "of audio files (a mounted Google Drive folder works well) and "
+                    "restart this app."
+                )
+            else:
+                filename = st.selectbox("Question audio", sorted(files))
                 audio_path = files[filename]
+                audio_label = filename
+        else:
+            recorded = st.audio_input("Record your question", key="mic_recording")
+            if recorded is not None:
+                # st.audio_input always returns WAV-encoded bytes.
+                tmp_dir = Path(tempfile.gettempdir()) / "lingkodai_mic_recordings"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                audio_path = tmp_dir / f"recording_{int(time.time())}.wav"
+                audio_path.write_bytes(recorded.getvalue())
+                audio_label = "microphone recording"
 
-                with st.chat_message("user"):
-                    st.audio(str(audio_path))
-                    st.caption(filename)
+        if audio_path is not None and st.button("Ask", type="primary"):
+            lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
 
-                with st.chat_message("assistant"):
-                    t0 = time.time()
-                    try:
-                        turn = run_audio_turn(audio_path, lang, st.session_state.history)
-                    except Exception as exc:
-                        st.error(f"This turn failed: {exc}")
-                        st.stop()
-                    wall = time.time() - t0
+            with st.chat_message("user"):
+                st.audio(str(audio_path))
+                st.caption(audio_label)
 
-                    lang_label = LANG_NAMES.get(lang, lang)
-                    st.caption(f"Transcript: {turn['transcript']}")
-                    st.markdown(f"**English:** {turn['english_answer']}")
-                    if lang != "eng":
-                        st.markdown(f"**{lang_label}:** {turn['native_answer']}")
-                    if turn["chunk_ids"]:
-                        st.caption("Chunks used: " + ", ".join(turn["chunk_ids"]))
-                    else:
-                        st.caption("No matching PRC service found.")
-                    if turn.get("audio_out") is not None:
-                        st.audio(_wav_bytes(turn["audio_out"], turn["audio_out_sr"]))
-                    elif not turn.get("tts_ok"):
-                        st.caption(f"No answer audio: {turn['tts_failure_reason']}")
-                    st.caption(f"Total: {wall:.1f}s")
+            with st.chat_message("assistant"):
+                t0 = time.time()
+                try:
+                    turn = run_audio_turn(audio_path, lang, st.session_state.history)
+                except Exception as exc:
+                    st.error(f"This turn failed: {exc}")
+                    st.stop()
+                wall = time.time() - t0
 
-                turn["native_query"] = turn["transcript"]
-                st.session_state.history.append(rag.HistoryTurn("human", turn["english_query"]))
-                st.session_state.history.append(rag.HistoryTurn("ai", turn["english_answer"]))
-                st.session_state.display_history.append(turn)
+                lang_label = LANG_NAMES.get(lang, lang)
+                st.caption(f"Transcript: {turn['transcript']}")
+                st.markdown(f"**English:** {turn['english_answer']}")
+                if lang != "eng":
+                    st.markdown(f"**{lang_label}:** {turn['native_answer']}")
+                if turn["chunk_ids"]:
+                    st.caption("Chunks used: " + ", ".join(turn["chunk_ids"]))
+                else:
+                    st.caption("No matching PRC service found.")
+                if turn.get("audio_out") is not None:
+                    st.audio(_wav_bytes(turn["audio_out"], turn["audio_out_sr"]))
+                elif not turn.get("tts_ok"):
+                    st.caption(f"No answer audio: {turn['tts_failure_reason']}")
+                st.caption(f"Total: {wall:.1f}s")
+
+            turn["native_query"] = turn["transcript"]
+            st.session_state.history.append(rag.HistoryTurn("human", turn["english_query"]))
+            st.session_state.history.append(rag.HistoryTurn("ai", turn["english_answer"]))
+            st.session_state.display_history.append(turn)
 
 
 if __name__ == "__main__":
