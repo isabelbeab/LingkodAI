@@ -18,6 +18,7 @@ not ported -- the pipeline only needs the plain, greedy `generate_answer`.
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import re
@@ -114,6 +115,7 @@ class RAGBundle:
 
     def unload(self) -> None:
         del self.embed_model, self.gen_model
+        gc.collect()
         if self.device == "cuda":
             torch.cuda.empty_cache()
 

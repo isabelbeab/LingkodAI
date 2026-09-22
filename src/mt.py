@@ -17,6 +17,7 @@ an identical chunk-batch-reassemble pattern in both directions.
 
 from __future__ import annotations
 
+import gc
 import re
 import time
 from dataclasses import dataclass
@@ -105,6 +106,7 @@ class MTBundle:
 
     def unload(self) -> None:
         del self.model
+        gc.collect()
         if self.device == "cuda":
             torch.cuda.empty_cache()
 

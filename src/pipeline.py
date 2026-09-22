@@ -30,8 +30,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 
 from . import asr, audio, lid_audio, lid_text, mt, rag, routing, tts
+
+
+def _print_gpu_mem(label: str) -> None:
+    """Free/total CUDA memory at a phase boundary, for diagnosing OOMs across
+    phases without guessing -- see DECISIONS.md's TTS OOM investigation."""
+    if not torch.cuda.is_available():
+        return
+    free_b, total_b = torch.cuda.mem_get_info()
+    print(f"  [gpu] {label}: {free_b / 1e9:.2f} GB free / {total_b / 1e9:.2f} GB total")
 
 
 @dataclass
@@ -116,6 +126,7 @@ def run_staged(
     # --- Phase 1: audio LID (turn 0 only) + ASR (every turn) + text LID
     # (turn 0 only) + routing -----------------------------------------
     print(f"[phase 1/5] audio LID, ASR, text LID, routing -- {len(turns)} turn(s)")
+    _print_gpu_mem("start of phase 1")
 
     lid_model = lid_audio.load()
     try:
@@ -144,6 +155,7 @@ def run_staged(
 
     # --- Phase 2: MT in, all turns -------------------------------------
     print("[phase 2/5] MT in (native -> English)")
+    _print_gpu_mem("start of phase 2")
 
     mt_bundle = mt.load()
     try:
@@ -159,6 +171,7 @@ def run_staged(
 
     # --- Phase 3: RAG, turn by turn in order ----------------------------
     print("[phase 3/5] RAG")
+    _print_gpu_mem("start of phase 3")
 
     rag_bundle = rag.load(data_dir=rag_data_dir)
     try:
@@ -181,6 +194,7 @@ def run_staged(
 
     # --- Phase 4: MT out, all turns --------------------------------------
     print("[phase 4/5] MT out (English -> native)")
+    _print_gpu_mem("start of phase 4")
 
     mt_bundle = mt.load()
     try:
@@ -196,6 +210,7 @@ def run_staged(
 
     # --- Phase 5: TTS, all turns ------------------------------------------
     print("[phase 5/5] TTS")
+    _print_gpu_mem("start of phase 5")
 
     tts_bundle = tts.load()
     try:
