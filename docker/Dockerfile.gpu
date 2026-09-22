@@ -34,13 +34,16 @@ WORKDIR /app
 
 # torch FIRST, from the PyTorch cu126 wheel index, not PyPI. The PyPI torch
 # wheel ships a different CUDA build and would either fail on the host driver or
-# silently fall back to CPU. cu126 matches JOJIE's lingkod-qwen3tts env
-# (torch 2.13.0+cu126, transformers 4.57.3).
+# silently fall back to CPU. cu126 matches JOJIE's lingkod-e2e env.
 #
-# UNVERIFIED FROM THIS SIDE: the exact patch version available on that index was
-# not checkable when this file was written. Pin it to whatever JOJIE's
-# `pip freeze | grep -E '^torch'` reports, so the container and JOJIE run the
-# same build, then delete this note.
+# torch version confirmed 2026-09-22 from a real golden-check run's own printed
+# environment block on JOJIE: torch 2.14.0+cu126, transformers 4.57.3 (not
+# 2.13.0+cu126 as this comment previously guessed, unverified). torchaudio's
+# exact version is still unconfirmed -- that run's environment print does not
+# include it. Still not pinned here: pinning only torch without a matching
+# confirmed torchaudio version risks a mismatched pair. Run
+# `pip freeze | grep -E '^torch'` on JOJIE (matches both lines) to get both,
+# then pin here and delete this note.
 RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu126 \
         torch torchaudio
