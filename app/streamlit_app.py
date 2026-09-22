@@ -10,14 +10,15 @@ What runs live in here, on CPU:
     spell-out, CEB segmentation and pause planning), previewing the text
     LingkodAI would hand to the voice model, without actually running it
 
-What does NOT run in here: audio LID, ASR, NLLB, the RAG LLM, Qwen3-TTS.
-Those need a GPU. This page instead browses pre-rendered audio from real
-end-to-end conversations recorded on JOJIE (demo_audio/), and -- once
-GPU_BACKEND_URL points at a real backend -- can reach it for the live
-pipeline. GPU_BACKEND_URL is read and surfaced below, but no live API call
-is wired yet: no GPU host exists (Fly retired GPU machines 2026-08-01) and
-no request/response contract for one has been defined anywhere in this
-repo, so inventing one here would be a guess, not a port. See CLAUDE.md.
+What does NOT run in here directly: audio LID, ASR, NLLB, the RAG LLM,
+Qwen3-TTS. Those need a GPU. This page browses pre-rendered audio from real
+end-to-end conversations recorded on JOJIE (demo_audio/), previews the text
+frontend live, and -- when GPU_BACKEND_URL is set -- calls a real GPU
+backend (app/gpu_backend_api.py, run separately on a real GPU host, e.g.
+Colab) over HTTP for a live pipeline. No torch import here either way: the
+call is a plain requests.post(), same as any other HTTP client. See
+CLAUDE.md; this Fly app is still the CPU-only frontend, the GPU work
+happens elsewhere entirely.
 
 demo_audio/<conversation_name>/ is exactly one scripts/run_conversation.py
 output directory (manifest.json + turn_N.json + turn_N.wav), copied in
@@ -36,6 +37,7 @@ import os
 import sys
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 # The vendored TTS frontend modules import each other by top-level name
@@ -166,9 +168,8 @@ def render_frontend_tab() -> None:
         "would be spoken, not audio -- synthesis itself needs a GPU."
     )
 
-    gpu_backend = os.environ.get("GPU_BACKEND_URL")
-    if gpu_backend:
-        st.caption(f"GPU_BACKEND_URL is configured ({gpu_backend}), but this demo does not call it yet.")
+    if os.environ.get("GPU_BACKEND_URL"):
+        st.caption("A GPU backend is configured -- see the \"Live pipeline\" tab for real translation and answers.")
 
     text = st.text_area("Text to preview", placeholder="Type a PRC-related answer here...", height=120)
     lang_choice = st.radio(
@@ -211,6 +212,62 @@ def render_frontend_tab() -> None:
             st.warning(f"The frontend raised on this text: {exc}")
 
 
+# --- Live pipeline, via GPU_BACKEND_URL --------------------------------------
+def render_live_tab() -> None:
+    """Calls a real GPU backend (app/gpu_backend_api.py) over plain HTTP for
+    real translation + retrieval + generation + translation back. No torch
+    import here -- requests is a plain HTTP client, same as any other. Only
+    meaningful when GPU_BACKEND_URL is set to a reachable backend; otherwise
+    shows why not, same "no silent fallback" spirit as the rest of this app.
+    """
+    gpu_backend = os.environ.get("GPU_BACKEND_URL")
+    if not gpu_backend:
+        st.info(
+            "GPU_BACKEND_URL is not set, so this tab has nothing to call. "
+            "This Fly app is CPU-only by design -- see app/gpu_backend_api.py "
+            "for the backend this would reach, run separately on a real GPU host."
+        )
+        return
+
+    try:
+        health = requests.get(f"{gpu_backend}/health", timeout=5)
+        health.raise_for_status()
+        loaded = health.json().get("loaded", False)
+    except requests.exceptions.RequestException as exc:
+        st.error(f"GPU backend at {gpu_backend} is not reachable: {exc}")
+        return
+
+    if not loaded:
+        st.warning("GPU backend is reachable but still loading its models -- try again shortly.")
+        return
+
+    st.caption(f"Connected to a live GPU backend at {gpu_backend}. Text in, real answer back -- no audio yet.")
+
+    text = st.text_area("Your question", placeholder="Type a question here...", height=100, key="live_text")
+    lang_choice = st.radio("Language", ["Cebuano", "Filipino", "English"], horizontal=True, key="live_lang")
+
+    if st.button("Ask", type="primary", disabled=not text.strip()):
+        lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
+        try:
+            with st.spinner("Translating, retrieving, generating, translating back..."):
+                resp = requests.post(
+                    f"{gpu_backend}/chat", data={"lang": lang, "text": text}, timeout=60
+                )
+                resp.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            st.error(f"Request to the GPU backend failed: {exc}")
+            return
+
+        result = resp.json()
+        st.markdown(f"**English:** {result['english_answer']}")
+        if lang != "eng":
+            st.markdown(f"**{LANG_NAMES[lang]}:** {result['native_answer']}")
+        if result["chunk_ids"]:
+            st.caption("Chunks used: " + ", ".join(result["chunk_ids"]))
+        else:
+            st.caption("No matching PRC service found.")
+
+
 # --- Password gate ---------------------------------------------------------
 def require_password() -> bool:
     app_password = os.environ.get("APP_PASSWORD")
@@ -249,11 +306,15 @@ def main() -> None:
         "reproducible pipeline with a hosted front end -- not a production system."
     )
 
-    demo_tab, frontend_tab = st.tabs(["Recorded conversations", "Try the text frontend"])
+    demo_tab, frontend_tab, live_tab = st.tabs(
+        ["Recorded conversations", "Try the text frontend", "Live pipeline"]
+    )
     with demo_tab:
         render_demo_tab()
     with frontend_tab:
         render_frontend_tab()
+    with live_tab:
+        render_live_tab()
 
 
 if __name__ == "__main__":
