@@ -7,9 +7,10 @@ language. Scope: Scenario 2 (language identification on), multi-turn
 conversations.
 
 This is a containerized, reproducible pipeline with a hosted front end, not a
-production deployment. See `CLAUDE.md` for full project context and
-`DECISIONS.md` for the reasoning behind specific choices; where the two
-disagree, `DECISIONS.md` is newer and wins.
+production deployment. Each stage module documents its own settings and
+source of truth in its docstring (`src/mt.py`, `src/rag.py`, `src/tts.py`,
+`src/routing.py`, ...); `CHANGELOG.md` records the reasoning behind
+decisions that took discussion, in the order they were made.
 
 ## Pipeline stages
 
@@ -45,6 +46,29 @@ Three artifacts, all built from this one repo:
    `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
    cannot run Docker.
 
+## Execution modes
+
+The full model set does not fit together on an 11GB GPU (NLLB-3.3B fp16
+alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
+
+- **`staged`** (default, for an 11GB card, e.g. JOJIE): phase-major over a
+  whole scripted conversation, the way the evaluated DS6 run was produced.
+  Each phase loads its models once, processes every turn, then frees them
+  (`del`, `gc.collect()`, `torch.cuda.empty_cache()`):
+  1. audio LID, ASR, text LID and routing, all turns
+  2. MT in, all turns
+  3. RAG, turn by turn in order (follow-up rewriting needs earlier English
+     answers)
+  4. MT out, all turns
+  5. TTS, all turns
+
+  Implemented in `src/pipeline.py` (`run_staged`). This is the runner
+  `scripts/run_conversation.py` and the golden check both use.
+- **`resident`** (40GB or larger): everything loaded once, a per-turn API for
+  an interactive app. A stretch goal, not implemented here -- build it only
+  after `staged` passes the golden check. `app/gpu_backend_api.py` is a
+  prototype of this shape for a large-VRAM host.
+
 ## Quickstart: the CLI
 
 ```bash
@@ -55,8 +79,9 @@ python scripts/run_conversation.py --audio TURN1.wav TURN2.wav --out outputs/RUN
 `--audio` files as the conversation has turns, in order. This needs the
 `gpu` extra (see Environment below) and, for a practical runtime, an actual
 GPU: NLLB and Qwen3-TTS on CPU would technically run but far too slowly to
-be useful. Per project rules, never run this against real models on a
-laptop with no GPU -- see CLAUDE.md's "Where things run".
+be useful. Never run this against real models on a laptop with no GPU --
+develop and test with fakes locally (see Testing below), and run for real
+only on a machine that actually has one.
 
 Output: one `manifest.json` (turn count, locked `final_lang`, whether
 routing overrode text LID), one `turn_N.json` per turn (transcript, English
@@ -157,10 +182,14 @@ fly deploy
 ```
 
 Fly retired GPU machines on 2026-08-01, so there is no GPU host behind this
-deploy yet. When one exists (RunPod, Modal, or similar), pointing
-`GPU_BACKEND_URL` at it is meant to bring the same app live end to end with
-no code change to the CPU app itself -- that wiring is not built yet, since
-no such backend or its API contract exists to build against.
+deploy. A `GPU_BACKEND_URL`-based "live pipeline" tab and matching
+`app/gpu_backend_api.py` backend were built and verified end to end against
+a Colab-hosted backend, then deliberately deprecated as more moving parts
+than the presentation needed -- the CPU app's job is the pre-rendered
+recorded-conversations demo above, not a live GPU round trip. The code is
+left in the repo (`app/gpu_backend_api.py`, the "Live pipeline" tab in
+`app/streamlit_app.py`) in case a real GPU host is worth wiring up again
+later, but `GPU_BACKEND_URL` is currently unset.
 
 ## Contributing
 
@@ -169,9 +198,16 @@ no such backend or its API contract exists to build against.
   file.
 - `src/tts_frontend/` is vendored verbatim from JOJIE and must not be
   edited either. See `src/tts_frontend/VENDORED.md`.
+- New stage modules are ports, not redesigns: same models, prompts,
+  constants, decoding settings, thresholds and fallback messages as their
+  source notebook. Prompts must be byte-identical to the source.
 - Work happens on branch `e2e-integration`; PRs to `main` only, never a
-  direct push.
+  direct push. One stage per commit; commit messages start with the stage
+  number.
 - No silent fallbacks: a missing file, token, or unexpected shape raises
-  with a clear message rather than guessing.
+  with a clear message rather than guessing. The only designed fallbacks
+  anywhere in the pipeline are RAG's no-match message (`src/rag.py`) and
+  TTS's text-only turn (`src/tts.py`'s `synthesize_turn`).
 
-See `CLAUDE.md` for the full detail behind every rule above.
+See `CHANGELOG.md` for the reasoning behind specific decisions, and each
+stage module's own docstring for its settings and source of truth.

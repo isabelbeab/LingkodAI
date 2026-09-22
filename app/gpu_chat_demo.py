@@ -57,7 +57,7 @@ New environment requirements beyond the text-only version:
   ASR_CEB/FIL/ENG     required -- point at scripts/patch_asr_tokenizers.py's
                       output; that script must be run first (produces local
                       checkpoint copies, the patch is not baked into the HF
-                      repos). See DECISIONS.md #9.
+                      repos). See CHANGELOG.md, 2026-09-22.
   TTS_REF_DIR         required for audio mode -- the three locked reference
                       clips, staged via Drive (HK's choice; download from
                       JOJIE's TTS_REF_DIR, upload to Drive, mount it here).

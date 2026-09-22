@@ -15,9 +15,9 @@ LID decides the conversation's language exactly once, on turn 1. The decision
 is locked for every later turn; a wrong first-turn call misroutes the whole
 conversation by design -- there is no per-turn correction.
 
-Decided in DECISIONS.md #3, confirmed by Bea 2026-09-22: the original
-placeholder (audio LID always wins) was written in her absence and explicitly
-flagged for revisit once she weighed in; this is that revisit.
+Decided in CHANGELOG.md, 2026-09-22: the original placeholder (audio LID
+always wins) was written in Bea's absence and explicitly flagged for revisit
+once she weighed in; this is that revisit.
 """
 
 from __future__ import annotations
