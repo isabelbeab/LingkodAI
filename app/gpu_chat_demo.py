@@ -3,50 +3,85 @@ directly (unlike app/streamlit_app.py, which must stay torch-free so the
 CPU/Fly image can build without them).
 
 NOT part of docker/Dockerfile.cpu or docker/Dockerfile.gpu, not referenced by
-fly.toml. Run directly on a real GPU host with `streamlit run
+fly.toml. Run directly on a real GPU host (Colab A100) with `streamlit run
 app/gpu_chat_demo.py`, tunneled out with cloudflared (see
 reference/colab_streamlit_launcher.ipynb for the tunnel pattern this
 mirrors), torn down after use. Never describe this as a fourth shipped
 artifact.
 
-Text in, stages 4-6 only (MT in -> RAG -> MT out). No audio LID, ASR, or TTS
--- no audio in or out anywhere in this file, by design (HK: "we can skip ASR
-and TTS if we really can't... at the very least we should try to show the
-text chatbot component"). No private HF_TOKEN-gated checkpoints needed
-either: NLLB, RAG's Harrier embedding + Qwen3-4B-Instruct generation model,
-and GlotLID are all public.
+Standalone Streamlit app -- no Fly frontend, no GPU_BACKEND_URL. That split
+architecture was tried and abandoned the same day it was built (Fly kept
+restarting; not worth chasing down under deadline pressure) in favor of
+this simpler, single-process design: one Streamlit app IS the whole demo,
+same as the original version of this file.
 
-RESIDENT, not staged: mt.load() and rag.load() each run once per server
-process (st.cache_resource) and stay loaded, rather than loading/unloading
-per question. First tried staged (load/use/unload every question) on
-JOJIE's 11GB card, where residency was unmeasured and likely too tight
-(NLLB fp16 alone is 6.7GB); that also meant a multi-minute wait per
-question, which -- combined with JOJIE's shared-JupyterHub session drops --
-broke a live cloudflared tunnel outright (see DECISIONS around 2026-09-22).
-On a large-VRAM host (Colab A100, 85GB) residency is comfortable, and
-loading once removes the per-question wait that made the tunnel fragile in
-the first place.
+Two input modes:
+  - Text: stages 4-6 only (MT in -> RAG -> MT out), typed text in, text
+    answer back. This is the original version of this file, unchanged.
+  - Audio: stages 2 + 4-7 (ASR, MT in, RAG, MT out, TTS), a pre-staged
+    audio file selected from a dropdown in, transcript + text answer +
+    synthesized answer audio back. No audio LID (stage 1) -- language is
+    picked manually in the dropdown's language selector, same
+    simplification the text mode already makes for GlotLID (there it's
+    optional auto-detect; here there is no live audio to run LID on
+    ahead of time in a way that would be safe to skip re-verifying, so
+    it is manual only). This also avoids needing to transfer
+    models/deeper_50chunks.pt (Bea's file) to this host.
 
-No password gate: nothing here touches the cloned research-speaker voice
-(no TTS at all), and the RAG knowledge base is public PRC citizen's-charter
-content. Nothing here needs gating.
+The audio dropdown is deliberately not a live microphone recorder
+(st.audio_input): a dropdown of known-good files is lower-risk for a live
+presentation (no room noise, no mic permission prompts, no surprise silent
+takes) while the actual compute -- ASR, translation, retrieval, generation,
+translation back, synthesis -- still runs for real, live, when the button
+is clicked. Point DEMO_INPUT_AUDIO_DIR at a folder of audio files (a
+mounted Google Drive folder works well) and the dropdown lists whatever is
+in it -- add a new demo question by adding a file to Drive, no code change.
+
+Resident where it matters, lazy where it doesn't: mt.load() and rag.load()
+load once at first use and stay resident (st.cache_resource), matching the
+already-verified fix for the latency that broke the very first JOJIE live
+attempt. asr.load(lang) is cached per language (lazy: a language never
+selected in this session is never loaded), and tts.load() is cached once,
+lazy on first audio-mode use. On a 40GB A100 the combined worst case (NLLB
++ RAG + all 3 ASR checkpoints + TTS all resident at once) is the one
+genuinely unmeasured number in this design -- check `nvidia-smi` after
+exercising all three languages once, same discipline as the JOJIE OOM
+investigation earlier this project.
+
+New environment requirements beyond the text-only version:
+  HF_TOKEN            required -- the ASR checkpoints are private.
+  ASR_CEB/FIL/ENG     required -- point at scripts/patch_asr_tokenizers.py's
+                      output; that script must be run first (produces local
+                      checkpoint copies, the patch is not baked into the HF
+                      repos). See DECISIONS.md #9.
+  TTS_REF_DIR         required for audio mode -- the three locked reference
+                      clips, staged via Drive (HK's choice; download from
+                      JOJIE's TTS_REF_DIR, upload to Drive, mount it here).
+  DEMO_INPUT_AUDIO_DIR required for audio mode -- a folder of question audio
+                      files for the dropdown, same Drive-staging idea.
 """
 
 from __future__ import annotations
 
+import io
 import sys
 import time
 from pathlib import Path
 
+import soundfile as sf
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src import lid_text, mt, rag  # noqa: E402
+from src import asr, audio, lid_text, mt, rag, tts  # noqa: E402
 
 LANG_NAMES = {"ceb": "Cebuano", "fil": "Filipino", "eng": "English"}
 
+DEFAULT_INIT_SET_PATH = Path(__file__).resolve().parents[1] / "data" / "init_set_ds6.json"
+AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac"}
 
+
+# --- Resident / lazily-cached model loaders ---------------------------------
 @st.cache_resource(show_spinner="Loading GlotLID (text language ID)...")
 def load_text_lid() -> lid_text.TextLID:
     return lid_text.load()
@@ -62,6 +97,21 @@ def load_rag() -> rag.RAGBundle:
     return rag.load()
 
 
+@st.cache_resource(show_spinner="Loading ASR checkpoint (first use for this language only)...")
+def load_asr(lang: str) -> asr.ASRBundle:
+    return asr.load(lang)
+
+
+@st.cache_resource(show_spinner="Loading Qwen3-TTS (first audio-mode use, loads reference clips)...")
+def load_tts() -> tts.TTSBundle:
+    return tts.load()
+
+
+@st.cache_resource(show_spinner=False)
+def load_init_set() -> set[str]:
+    return tts.load_init_set(DEFAULT_INIT_SET_PATH)
+
+
 def print_environment() -> None:
     import torch
     import transformers
@@ -74,11 +124,11 @@ def print_environment() -> None:
     st.caption(f"torch {torch.__version__} | transformers {transformers.__version__} | GPU {gpu_note}")
 
 
+# --- Text mode: stages 4-6 ---------------------------------------------------
 def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
     """One question through stages 4-6, using the resident models loaded
-    once at server startup. Returns a dict of everything worth showing;
-    raises only if a stage itself raises unexpectedly (caught by the caller).
-    """
+    once at first use. Returns a dict of everything worth showing; raises
+    only if a stage itself raises unexpectedly (caught by the caller)."""
     result: dict = {"native_query": text, "final_lang": lang}
     mt_bundle = load_mt()
     rag_bundle = load_rag()
@@ -112,14 +162,65 @@ def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
     return result
 
 
+# --- Audio mode: stages 2 + 4-7 ----------------------------------------------
+def discover_input_audio_files() -> dict[str, Path]:
+    """filename -> path, for every audio file under DEMO_INPUT_AUDIO_DIR.
+    Empty dict (not an error) when unset or empty -- the audio-mode UI
+    explains what to do instead of erroring."""
+    import os
+
+    dir_str = os.environ.get("DEMO_INPUT_AUDIO_DIR")
+    if not dir_str:
+        return {}
+    d = Path(dir_str)
+    if not d.is_dir():
+        return {}
+    return {p.name: p for p in sorted(d.iterdir()) if p.suffix.lower() in AUDIO_EXTS}
+
+
+def _wav_bytes(audio_np, sr: int) -> bytes:
+    buf = io.BytesIO()
+    sf.write(buf, audio_np, sr, format="WAV")
+    return buf.getvalue()
+
+
+def run_audio_turn(audio_path: Path, lang: str, history: list[rag.HistoryTurn]) -> dict:
+    """One question from a pre-staged audio file through stages 2 + 4-7.
+    Reuses run_turn for the MT/RAG/MT chain rather than duplicating it."""
+    with st.status("Transcribing...", expanded=False) as status:
+        aud = audio.load_audio(str(audio_path))
+        transcript = load_asr(lang).transcribe(aud)
+        status.update(label=f"Transcribed ({len(transcript)} chars)", state="complete")
+
+    result = run_turn(transcript, lang, history)
+    result["transcript"] = transcript
+
+    with st.status("Synthesizing answer audio...", expanded=False) as status:
+        tts_result = tts.synthesize_turn(load_tts(), 0, result["native_answer"], lang, load_init_set())
+        result["tts_ok"] = tts_result.ok
+        result["tts_failure_reason"] = tts_result.failure_reason
+        result["audio_out"] = tts_result.audio
+        result["audio_out_sr"] = tts_result.sr
+        # The frontend raises on some inputs by design (see src/tts.py's
+        # module docstring); synthesize_turn already turns that into
+        # ok=False rather than crashing -- the text answer above is
+        # unaffected either way.
+        status.update(
+            label="Answer audio ready" if tts_result.ok else f"TTS failed: {tts_result.failure_reason}",
+            state="complete" if tts_result.ok else "error",
+        )
+
+    return result
+
+
 def main() -> None:
     st.set_page_config(page_title="LingkodAI (live)", page_icon="🇵🇭", layout="wide")
-    st.title("LingkodAI -- live text chatbot")
+    st.title("LingkodAI -- live demo")
     st.caption(
-        "Presentation-only live demo. Text in, real translation + retrieval + "
-        "generation + translation back -- no audio anywhere. Models load once "
-        "at startup and stay resident, so only the first question after a "
-        "fresh start is slow."
+        "Presentation-only live demo, standalone on a real GPU host. Text or "
+        "audio in, real translation + retrieval + generation (+ synthesis for "
+        "audio) back. Models load once at first use and stay resident, so "
+        "only the first use of each language/mode is slow."
     )
     print_environment()
 
@@ -133,11 +234,16 @@ def main() -> None:
             st.session_state.history = []
             st.session_state.display_history = []
             st.rerun()
-        if st.button("Warm up models now"):
+        if st.button("Warm up text mode now"):
             load_mt()
             load_rag()
             load_text_lid()
-            st.success("Loaded and resident.")
+            st.success("Text mode loaded and resident.")
+        st.caption(
+            "ASR/TTS load lazily on first audio-mode use per language -- "
+            "click through each dropdown option once before presenting to "
+            "warm them up ahead of time."
+        )
 
     for turn in st.session_state.display_history:
         with st.chat_message("user"):
@@ -151,48 +257,104 @@ def main() -> None:
                 st.caption("Chunks used: " + ", ".join(turn["chunk_ids"]))
             else:
                 st.caption("No matching PRC service found.")
+            if turn.get("audio_out") is not None:
+                st.audio(_wav_bytes(turn["audio_out"], turn["audio_out_sr"]))
+            elif turn.get("tts_ok") is False:
+                st.caption(f"No answer audio: {turn['tts_failure_reason']}")
 
-    lang_choice = st.radio(
-        "Language", ["Auto-detect (GlotLID)", "Cebuano", "Filipino", "English"], horizontal=True
-    )
-    query = st.chat_input("Type your question here...")
+    mode = st.radio("Input mode", ["Text", "Audio"], horizontal=True)
 
-    if query:
-        with st.chat_message("user"):
-            st.write(query)
+    if mode == "Text":
+        lang_choice = st.radio(
+            "Language", ["Auto-detect (GlotLID)", "Cebuano", "Filipino", "English"], horizontal=True
+        )
+        query = st.chat_input("Type your question here...")
 
-        if lang_choice == "Auto-detect (GlotLID)":
-            lid_result = load_text_lid().predict(query)
-            if lid_result.lang is None:
-                st.error("GlotLID could not identify a language for this text.")
-                st.stop()
-            lang = lid_result.lang
-            st.caption(f"Detected: {LANG_NAMES[lang]} (confidence {lid_result.confidence:.3f})")
-        else:
-            lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
+        if query:
+            with st.chat_message("user"):
+                st.write(query)
 
-        with st.chat_message("assistant"):
-            t0 = time.time()
-            try:
-                turn = run_turn(query, lang, st.session_state.history)
-            except Exception as exc:
-                st.error(f"This turn failed: {exc}")
-                st.stop()
-            wall = time.time() - t0
-
-            lang_label = LANG_NAMES.get(lang, lang)
-            st.markdown(f"**English:** {turn['english_answer']}")
-            if lang != "eng":
-                st.markdown(f"**{lang_label}:** {turn['native_answer']}")
-            if turn["chunk_ids"]:
-                st.caption("Chunks used: " + ", ".join(turn["chunk_ids"]))
+            if lang_choice == "Auto-detect (GlotLID)":
+                lid_result = load_text_lid().predict(query)
+                if lid_result.lang is None:
+                    st.error("GlotLID could not identify a language for this text.")
+                    st.stop()
+                lang = lid_result.lang
+                st.caption(f"Detected: {LANG_NAMES[lang]} (confidence {lid_result.confidence:.3f})")
             else:
-                st.caption("No matching PRC service found.")
-            st.caption(f"Total: {wall:.1f}s")
+                lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
 
-        st.session_state.history.append(rag.HistoryTurn("human", turn["english_query"]))
-        st.session_state.history.append(rag.HistoryTurn("ai", turn["english_answer"]))
-        st.session_state.display_history.append(turn)
+            with st.chat_message("assistant"):
+                t0 = time.time()
+                try:
+                    turn = run_turn(query, lang, st.session_state.history)
+                except Exception as exc:
+                    st.error(f"This turn failed: {exc}")
+                    st.stop()
+                wall = time.time() - t0
+
+                lang_label = LANG_NAMES.get(lang, lang)
+                st.markdown(f"**English:** {turn['english_answer']}")
+                if lang != "eng":
+                    st.markdown(f"**{lang_label}:** {turn['native_answer']}")
+                if turn["chunk_ids"]:
+                    st.caption("Chunks used: " + ", ".join(turn["chunk_ids"]))
+                else:
+                    st.caption("No matching PRC service found.")
+                st.caption(f"Total: {wall:.1f}s")
+
+            st.session_state.history.append(rag.HistoryTurn("human", turn["english_query"]))
+            st.session_state.history.append(rag.HistoryTurn("ai", turn["english_answer"]))
+            st.session_state.display_history.append(turn)
+
+    else:  # Audio mode
+        lang_choice = st.radio("Language", ["Cebuano", "Filipino", "English"], horizontal=True, key="audio_lang")
+        files = discover_input_audio_files()
+
+        if not files:
+            st.info(
+                "No input audio files found. Set DEMO_INPUT_AUDIO_DIR to a folder "
+                "of audio files (a mounted Google Drive folder works well) and "
+                "restart this app."
+            )
+        else:
+            filename = st.selectbox("Question audio", sorted(files))
+            if st.button("Ask", type="primary"):
+                lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
+                audio_path = files[filename]
+
+                with st.chat_message("user"):
+                    st.audio(str(audio_path))
+                    st.caption(filename)
+
+                with st.chat_message("assistant"):
+                    t0 = time.time()
+                    try:
+                        turn = run_audio_turn(audio_path, lang, st.session_state.history)
+                    except Exception as exc:
+                        st.error(f"This turn failed: {exc}")
+                        st.stop()
+                    wall = time.time() - t0
+
+                    lang_label = LANG_NAMES.get(lang, lang)
+                    st.caption(f"Transcript: {turn['transcript']}")
+                    st.markdown(f"**English:** {turn['english_answer']}")
+                    if lang != "eng":
+                        st.markdown(f"**{lang_label}:** {turn['native_answer']}")
+                    if turn["chunk_ids"]:
+                        st.caption("Chunks used: " + ", ".join(turn["chunk_ids"]))
+                    else:
+                        st.caption("No matching PRC service found.")
+                    if turn.get("audio_out") is not None:
+                        st.audio(_wav_bytes(turn["audio_out"], turn["audio_out_sr"]))
+                    elif not turn.get("tts_ok"):
+                        st.caption(f"No answer audio: {turn['tts_failure_reason']}")
+                    st.caption(f"Total: {wall:.1f}s")
+
+                turn["native_query"] = turn["transcript"]
+                st.session_state.history.append(rag.HistoryTurn("human", turn["english_query"]))
+                st.session_state.history.append(rag.HistoryTurn("ai", turn["english_answer"]))
+                st.session_state.display_history.append(turn)
 
 
 if __name__ == "__main__":
