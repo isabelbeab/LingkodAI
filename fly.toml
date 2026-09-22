@@ -61,4 +61,8 @@ primary_region = "sin"   # Singapore, closest Fly region to Manila
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1gb"   # raise to 2gb if the app is OOM-killed while loading GlotLID
+  # Raised from 1gb 2026-09-22: the demo OOM-crash-looped loading GlotLID
+  # (~1.2 GB model) on first use, confirmed via `fly logs` ("Out of memory:
+  # Killed process ... streamlit"). This is the fix this comment already
+  # called for.
+  memory = "2gb"
