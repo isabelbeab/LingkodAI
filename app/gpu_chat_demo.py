@@ -132,37 +132,54 @@ def print_environment() -> None:
 # --- Text mode: stages 4-6 ---------------------------------------------------
 def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
     """One question through stages 4-6, using the resident models loaded
-    once at first use. Returns a dict of everything worth showing; raises
-    only if a stage itself raises unexpectedly (caught by the caller)."""
+    once at first use. Each stage's actual output prints inline (expanded
+    status, not just a timing label) as soon as that stage finishes --
+    a presentation showing how the pipeline works, not just its final
+    answer. Returns a dict of everything worth showing; raises only if a
+    stage itself raises unexpectedly (caught by the caller)."""
     result: dict = {"native_query": text, "final_lang": lang}
     mt_bundle = load_mt()
     rag_bundle = load_rag()
+    lang_label = LANG_NAMES.get(lang, lang)
 
-    with st.status("Translating to English...", expanded=False) as status:
+    with st.status("Stage 4: translating to English...", expanded=True) as status:
         mt_in = mt.translate_to_english(mt_bundle, [mt.TurnText(id=0, text=text, lang=lang)])[0]
         if not mt_in.ok:
-            status.update(label="MT in failed", state="error")
+            status.update(label="Stage 4 failed", state="error")
             raise RuntimeError(f"MT in failed: {mt_in.failure_reason}")
         result["english_query"] = mt_in.text
-        status.update(label=f"Translated to English ({mt_in.translate_time_sec:.1f}s)", state="complete")
+        st.write(f"**English query:** {mt_in.text}")
+        status.update(
+            label=f"Stage 4 done: translated to English ({mt_in.translate_time_sec:.1f}s)",
+            state="complete", expanded=True,
+        )
 
-    with st.status("Retrieving and generating answer...", expanded=False) as status:
+    with st.status("Stage 5: retrieving + generating answer...", expanded=True) as status:
         rag_result = rag.answer_turn(rag_bundle, mt_in.text, history)
         result["resolved_query"] = rag_result.resolved_query
         result["was_dependent"] = rag_result.was_dependent
         result["english_answer"] = rag_result.answer
         result["chunk_ids"] = rag_result.chunk_ids
-        status.update(label="Answer generated", state="complete")
+        if rag_result.was_dependent:
+            st.write(f"**Resolved follow-up to:** {rag_result.resolved_query}")
+        st.write(f"**English answer:** {rag_result.answer}")
+        st.caption("Chunks used: " + (", ".join(rag_result.chunk_ids) if rag_result.chunk_ids else "none"))
+        status.update(label="Stage 5 done: answer generated", state="complete", expanded=True)
 
-    with st.status("Translating answer back...", expanded=False) as status:
+    with st.status("Stage 6: translating answer back...", expanded=True) as status:
         mt_out = mt.translate_from_english(
             mt_bundle, [mt.TurnText(id=0, text=rag_result.answer, lang=lang)]
         )[0]
         if not mt_out.ok:
-            status.update(label="MT out failed", state="error")
+            status.update(label="Stage 6 failed", state="error")
             raise RuntimeError(f"MT out failed: {mt_out.failure_reason}")
         result["native_answer"] = mt_out.text
-        status.update(label=f"Translated back ({mt_out.translate_time_sec:.1f}s)", state="complete")
+        if lang != "eng":
+            st.write(f"**{lang_label} answer:** {mt_out.text}")
+        status.update(
+            label=f"Stage 6 done: translated back ({mt_out.translate_time_sec:.1f}s)",
+            state="complete", expanded=True,
+        )
 
     return result
 
@@ -191,16 +208,21 @@ def _wav_bytes(audio_np, sr: int) -> bytes:
 
 def run_audio_turn(audio_path: Path, lang: str, history: list[rag.HistoryTurn]) -> dict:
     """One question from a pre-staged audio file through stages 2 + 4-7.
-    Reuses run_turn for the MT/RAG/MT chain rather than duplicating it."""
-    with st.status("Transcribing...", expanded=False) as status:
+    Reuses run_turn for the MT/RAG/MT chain rather than duplicating it --
+    its own stage-by-stage inline output (English query, answer, native
+    answer) all appears here too, well before this function reaches TTS,
+    since TTS is by far the slowest stage. Text results are never gated
+    behind audio synthesis finishing."""
+    with st.status("Stage 2: transcribing (ASR)...", expanded=True) as status:
         aud = audio.load_audio(str(audio_path))
         transcript = load_asr(lang).transcribe(aud)
-        status.update(label=f"Transcribed ({len(transcript)} chars)", state="complete")
+        st.write(f"**Transcript:** {transcript}")
+        status.update(label="Stage 2 done: transcribed", state="complete", expanded=True)
 
     result = run_turn(transcript, lang, history)
     result["transcript"] = transcript
 
-    with st.status("Synthesizing answer audio...", expanded=False) as status:
+    with st.status("Stage 7: synthesizing answer audio (TTS)...", expanded=True) as status:
         tts_result = tts.synthesize_turn(load_tts(), 0, result["native_answer"], lang, load_init_set())
         result["tts_ok"] = tts_result.ok
         result["tts_failure_reason"] = tts_result.failure_reason
@@ -211,8 +233,9 @@ def run_audio_turn(audio_path: Path, lang: str, history: list[rag.HistoryTurn]) 
         # ok=False rather than crashing -- the text answer above is
         # unaffected either way.
         status.update(
-            label="Answer audio ready" if tts_result.ok else f"TTS failed: {tts_result.failure_reason}",
+            label="Stage 7 done: answer audio ready" if tts_result.ok else f"Stage 7 failed: {tts_result.failure_reason}",
             state="complete" if tts_result.ok else "error",
+            expanded=True,
         )
 
     return result
