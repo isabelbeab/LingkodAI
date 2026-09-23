@@ -37,10 +37,10 @@ Three artifacts, all built from this one repo:
 1. **The package plus CLI** (`scripts/run_conversation.py`): audio files in,
    per-turn JSON and WAV out. This is the real system and the thing the
    golden check runs against.
-2. **The CPU image and the Fly app**: a slim container with no torch,
-   hosting a public demo. It runs the text frontend and GlotLID text
-   language identification live, and serves pre-rendered audio from
-   recorded end-to-end conversations. This is what gets a URL.
+2. **The CPU image**: a slim container with no torch, for a public demo.
+   It runs the text frontend and GlotLID text language identification
+   live, and serves pre-rendered audio from recorded end-to-end
+   conversations. Hosting platform is not yet decided; see `CHANGELOG.md`.
 3. **The GPU image**: the full pipeline containerized. It is built and
    import-checked locally, but verified for real only on JOJIE through the
    `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
@@ -169,27 +169,6 @@ every diff -- it does not fail the run on a text mismatch, since greedy
 decoding can shift slightly across GPUs and library versions. A diff is
 meant to be read by a person. TTS audio is judged by listening, not compared
 by the script.
-
-## Fly deployment
-
-`fly.toml` builds `docker/Dockerfile.cpu`, region `sin`, with
-`auto_stop_machines` on so an idle demo costs nothing.
-
-```bash
-fly launch --no-deploy --copy-config --name lingkodai-demo
-fly secrets set APP_PASSWORD=pick-a-real-one
-fly deploy
-```
-
-Fly retired GPU machines on 2026-08-01, so there is no GPU host behind this
-deploy. A `GPU_BACKEND_URL`-based "live pipeline" tab and matching
-`app/gpu_backend_api.py` backend were built and verified end to end against
-a Colab-hosted backend, then deliberately deprecated as more moving parts
-than the presentation needed -- the CPU app's job is the pre-rendered
-recorded-conversations demo above, not a live GPU round trip. The code is
-left in the repo (`app/gpu_backend_api.py`, the "Live pipeline" tab in
-`app/streamlit_app.py`) in case a real GPU host is worth wiring up again
-later, but `GPU_BACKEND_URL` is currently unset.
 
 ## Contributing
 
