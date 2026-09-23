@@ -7,7 +7,7 @@ DS6 actually produced.
         --ds6 "reference/reference/DS6_augmented.xlsx" \\
         --out outputs/golden_check
 
-Per CLAUDE.md's Testing section: final_lang must match exactly. For
+Per README.md's Testing section: final_lang must match exactly. For
 transcript, English query, English answer and native answer, this script
 reports an exact-match rate and prints every diff -- it does NOT fail the
 run on a text mismatch. Greedy decoding can shift slightly across GPUs and
@@ -287,7 +287,7 @@ def main() -> int:
     print(f"\nWrote report and per-turn JSON/WAV to {args.out}")
     if not all_lang_match:
         print("\nfinal_lang did NOT match exactly for every conversation -- this is a real", file=sys.stderr)
-        print("problem per CLAUDE.md (final_lang must match exactly), not a read-and-judge diff.",
+        print("problem per README.md (final_lang must match exactly), not a read-and-judge diff.",
               file=sys.stderr)
         return 1
     return 0

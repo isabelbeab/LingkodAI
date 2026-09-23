@@ -14,10 +14,10 @@ def test_agreement_not_overridden():
     assert result.was_overridden is False
 
 
-def test_disagreement_audio_lid_still_wins():
+def test_disagreement_text_lid_wins():
     result = routing.decide(pred_lang="ceb", text_lang="fil")
-    # audio LID's label always wins -- final_lang is pred_lang, not text_lang
-    assert result.final_lang == "ceb"
+    # text LID's label wins on disagreement -- final_lang is text_lang, not pred_lang
+    assert result.final_lang == "fil"
     assert result.pred_lang == "ceb"
     assert result.text_lang == "fil"
     assert result.was_overridden is True
@@ -49,7 +49,7 @@ def test_unknown_text_lang_raises():
 
 def test_conversation_routing_locks_final_lang_from_first_turn():
     conv = routing.ConversationRouting.from_first_turn(pred_lang="fil", text_lang="eng")
-    assert conv.final_lang == "fil"
+    assert conv.final_lang == "eng"
     assert conv.was_overridden is True
 
     # the lock is just a stored value -- nothing re-derives it from later input

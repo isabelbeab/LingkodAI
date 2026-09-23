@@ -7,9 +7,10 @@ language. Scope: Scenario 2 (language identification on), multi-turn
 conversations.
 
 This is a containerized, reproducible pipeline with a hosted front end, not a
-production deployment. See `CLAUDE.md` for full project context and
-`DECISIONS.md` for the reasoning behind specific choices; where the two
-disagree, `DECISIONS.md` is newer and wins.
+production deployment. Each stage module documents its own settings and
+source of truth in its docstring (`src/mt.py`, `src/rag.py`, `src/tts.py`,
+`src/routing.py`, ...); `CHANGELOG.md` records the reasoning behind
+decisions that took discussion, in the order they were made.
 
 ## Pipeline stages
 
@@ -36,14 +37,37 @@ Three artifacts, all built from this one repo:
 1. **The package plus CLI** (`scripts/run_conversation.py`): audio files in,
    per-turn JSON and WAV out. This is the real system and the thing the
    golden check runs against.
-2. **The CPU image and the Fly app**: a slim container with no torch,
-   hosting a public demo. It runs the text frontend and GlotLID text
-   language identification live, and serves pre-rendered audio from
-   recorded end-to-end conversations. This is what gets a URL.
+2. **The CPU image**: a slim container with no torch, for a public demo.
+   It runs the text frontend and GlotLID text language identification
+   live, and serves pre-rendered audio from recorded end-to-end
+   conversations. Hosting platform is not yet decided; see `CHANGELOG.md`.
 3. **The GPU image**: the full pipeline containerized. It is built and
    import-checked locally, but verified for real only on JOJIE through the
    `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
    cannot run Docker.
+
+## Execution modes
+
+The full model set does not fit together on an 11GB GPU (NLLB-3.3B fp16
+alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
+
+- **`staged`** (default, for an 11GB card, e.g. JOJIE): phase-major over a
+  whole scripted conversation, the way the evaluated DS6 run was produced.
+  Each phase loads its models once, processes every turn, then frees them
+  (`del`, `gc.collect()`, `torch.cuda.empty_cache()`):
+  1. audio LID, ASR, text LID and routing, all turns
+  2. MT in, all turns
+  3. RAG, turn by turn in order (follow-up rewriting needs earlier English
+     answers)
+  4. MT out, all turns
+  5. TTS, all turns
+
+  Implemented in `src/pipeline.py` (`run_staged`). This is the runner
+  `scripts/run_conversation.py` and the golden check both use.
+- **`resident`** (40GB or larger): everything loaded once, a per-turn API for
+  an interactive app. A stretch goal, not implemented here -- build it only
+  after `staged` passes the golden check. `app/gpu_backend_api.py` is a
+  prototype of this shape for a large-VRAM host.
 
 ## Quickstart: the CLI
 
@@ -55,8 +79,9 @@ python scripts/run_conversation.py --audio TURN1.wav TURN2.wav --out outputs/RUN
 `--audio` files as the conversation has turns, in order. This needs the
 `gpu` extra (see Environment below) and, for a practical runtime, an actual
 GPU: NLLB and Qwen3-TTS on CPU would technically run but far too slowly to
-be useful. Per project rules, never run this against real models on a
-laptop with no GPU -- see CLAUDE.md's "Where things run".
+be useful. Never run this against real models on a laptop with no GPU --
+develop and test with fakes locally (see Testing below), and run for real
+only on a machine that actually has one.
 
 Output: one `manifest.json` (turn count, locked `final_lang`, whether
 routing overrode text LID), one `turn_N.json` per turn (transcript, English
@@ -145,23 +170,6 @@ decoding can shift slightly across GPUs and library versions. A diff is
 meant to be read by a person. TTS audio is judged by listening, not compared
 by the script.
 
-## Fly deployment
-
-`fly.toml` builds `docker/Dockerfile.cpu`, region `sin`, with
-`auto_stop_machines` on so an idle demo costs nothing.
-
-```bash
-fly launch --no-deploy --copy-config --name lingkodai-demo
-fly secrets set APP_PASSWORD=pick-a-real-one
-fly deploy
-```
-
-Fly retired GPU machines on 2026-08-01, so there is no GPU host behind this
-deploy yet. When one exists (RunPod, Modal, or similar), pointing
-`GPU_BACKEND_URL` at it is meant to bring the same app live end to end with
-no code change to the CPU app itself -- that wiring is not built yet, since
-no such backend or its API contract exists to build against.
-
 ## Contributing
 
 - `src/audio.py`, `src/lid_audio.py`, `src/asr.py`, `src/lid_text.py` and
@@ -169,9 +177,16 @@ no such backend or its API contract exists to build against.
   file.
 - `src/tts_frontend/` is vendored verbatim from JOJIE and must not be
   edited either. See `src/tts_frontend/VENDORED.md`.
+- New stage modules are ports, not redesigns: same models, prompts,
+  constants, decoding settings, thresholds and fallback messages as their
+  source notebook. Prompts must be byte-identical to the source.
 - Work happens on branch `e2e-integration`; PRs to `main` only, never a
-  direct push.
+  direct push. One stage per commit; commit messages start with the stage
+  number.
 - No silent fallbacks: a missing file, token, or unexpected shape raises
-  with a clear message rather than guessing.
+  with a clear message rather than guessing. The only designed fallbacks
+  anywhere in the pipeline are RAG's no-match message (`src/rag.py`) and
+  TTS's text-only turn (`src/tts.py`'s `synthesize_turn`).
 
-See `CLAUDE.md` for the full detail behind every rule above.
+See `CHANGELOG.md` for the reasoning behind specific decisions, and each
+stage module's own docstring for its settings and source of truth.

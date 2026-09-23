@@ -1,7 +1,7 @@
 """LingkodAI CPU demo (Streamlit). No torch imports anywhere in this file or
 anything it imports -- this is what makes the CPU image possible (target
 size around 200 MB, no CUDA, no model weights baked in). See
-docker/Dockerfile.cpu and CLAUDE.md's "What ships" #2.
+docker/Dockerfile.cpu and README.md's "What ships" #2.
 
 What runs live in here, on CPU:
   - GlotLID text language identification (src/lid_text.py -- fastText, CPU
@@ -16,9 +16,9 @@ end-to-end conversations recorded on JOJIE (demo_audio/), previews the text
 frontend live, and -- when GPU_BACKEND_URL is set -- calls a real GPU
 backend (app/gpu_backend_api.py, run separately on a real GPU host, e.g.
 Colab) over HTTP for a live pipeline. No torch import here either way: the
-call is a plain requests.post(), same as any other HTTP client. See
-CLAUDE.md; this Fly app is still the CPU-only frontend, the GPU work
-happens elsewhere entirely.
+call is a plain requests.post(), same as any other HTTP client. This Fly
+app is still the CPU-only frontend, the GPU work happens elsewhere
+entirely.
 
 demo_audio/<conversation_name>/ is exactly one scripts/run_conversation.py
 output directory (manifest.json + turn_N.json + turn_N.wav), copied in
@@ -27,7 +27,7 @@ invented for this page.
 
 The demo plays synthesized speech in a cloned PLD research speaker's voice
 (CC-BY-NC, research-only licence), which is why the page is password-gated
-and discloses the voice below (see CLAUDE.md's Docker and Fly section).
+and discloses the voice below (see README.md's Fly deployment section).
 """
 
 from __future__ import annotations

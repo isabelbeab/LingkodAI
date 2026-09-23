@@ -1,7 +1,7 @@
 """Conversation state and the staged pipeline runner.
 
 Ties stages 1-7 together for one scripted, multi-turn conversation, the way
-the evaluated DS6 run was produced. See CLAUDE.md's "Execution modes":
+the evaluated DS6 run was produced. See README.md's "Execution modes":
 `staged` (this module's only runner so far) is phase-major over the whole
 conversation -- each phase loads its models once, processes every turn, then
 frees them, because the models do not fit together on an 11 GB GPU. Phase
@@ -15,9 +15,9 @@ order:
   4. MT out, all turns
   5. TTS, all turns
 
-`resident` mode (everything loaded once, per-turn API) is a stretch goal per
-CLAUDE.md and is not implemented here -- build it only after `staged` passes
-the golden check.
+`resident` mode (everything loaded once, per-turn API) is a stretch goal and
+is not implemented here -- build it only after `staged` passes the golden
+check.
 
 No silent fallbacks. The only designed fallbacks anywhere in this pipeline
 are RAG's no-match message (src/rag.py) and TTS's text-only turn
@@ -37,7 +37,7 @@ from . import asr, audio, lid_audio, lid_text, mt, rag, routing, tts
 
 def _print_gpu_mem(label: str) -> None:
     """Free/total CUDA memory at a phase boundary, for diagnosing OOMs across
-    phases without guessing -- see DECISIONS.md's TTS OOM investigation."""
+    phases without guessing -- see CHANGELOG.md's 2026-09-22 TTS OOM entry."""
     if not torch.cuda.is_available():
         return
     free_b, total_b = torch.cuda.mem_get_info()

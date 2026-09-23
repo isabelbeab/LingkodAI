@@ -1,20 +1,23 @@
 """Stage 3 -- Routing decision and conversation language lock.
 
-Audio LID (stage 1) picks the ASR checkpoint and always wins on disagreement
-with text LID (stage 3's own model, src/lid_text.py). This ordering is forced,
-not chosen: ASR cannot run until a checkpoint is picked, and a checkpoint
-cannot be picked from a transcript that does not exist yet. Text LID's role is
-confirmation and diagnostics only: when it disagrees, the disagreement is
-recorded as `was_overridden`, but the final language is not changed and ASR is
-not re-run.
+Audio LID (stage 1) picks the ASR checkpoint. This ordering is forced, not
+chosen: ASR cannot run until a checkpoint is picked, and a checkpoint cannot
+be picked from a transcript that does not exist yet -- so the ASR checkpoint
+for turn 1 is always audio LID's choice, even under a later override.
+
+Text LID (stage 3's own model, src/lid_text.py) wins on disagreement for
+`final_lang`: when it disagrees with audio LID, the disagreement is recorded
+as `was_overridden`, and `final_lang` locks to text LID's label, not audio
+LID's. Text LID runs on the actual transcript, which audio LID cannot see.
+ASR is not re-run under the new language.
 
 LID decides the conversation's language exactly once, on turn 1. The decision
 is locked for every later turn; a wrong first-turn call misroutes the whole
 conversation by design -- there is no per-turn correction.
 
-Decided in DECISIONS.md #3, in the absence of Bea's Stage 1-3 multi-turn
-notebooks (not yet in reference/). Revisit only if those notebooks surface and
-show a different override rule.
+Decided in CHANGELOG.md, 2026-09-22: the original placeholder (audio LID
+always wins) was written in Bea's absence and explicitly flagged for revisit
+once she weighed in; this is that revisit.
 """
 
 from __future__ import annotations
@@ -36,9 +39,10 @@ class RoutingResult:
 
 
 def decide(pred_lang: str, text_lang: str | None) -> RoutingResult:
-    """Audio LID's label always wins; a disagreement with text LID is recorded
-    via `was_overridden`, not acted on. `text_lang` of None (an empty
-    transcript, see lid_text.TextLIDResult) never counts as a disagreement."""
+    """Text LID's label wins on disagreement with audio LID; the disagreement
+    is recorded via `was_overridden`. `text_lang` of None (an empty
+    transcript, see lid_text.TextLIDResult) never counts as a disagreement,
+    and `final_lang` falls back to `pred_lang`."""
     if pred_lang not in KNOWN_LANGS:
         raise ValueError(f"Unknown pred_lang {pred_lang!r}; expected one of {KNOWN_LANGS}")
     if text_lang is not None and text_lang not in KNOWN_LANGS:
@@ -48,7 +52,7 @@ def decide(pred_lang: str, text_lang: str | None) -> RoutingResult:
     return RoutingResult(
         pred_lang=pred_lang,
         text_lang=text_lang,
-        final_lang=pred_lang,
+        final_lang=text_lang if was_overridden else pred_lang,
         was_overridden=was_overridden,
     )
 
