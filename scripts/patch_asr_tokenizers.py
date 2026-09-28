@@ -10,7 +10,7 @@ A list of special tokens belongs under `additional_special_tokens`.
 src/asr.py is Bea's file and stays untouched. It already reads ASR_CEB, ASR_FIL
 and ASR_ENG, so this script builds a patched copy of each checkpoint folder
 (weights symlinked from the HF cache, only tokenizer_config.json rewritten) and
-prints the exports that point asr.py at them. See DECISIONS.md #9.
+prints the exports that point asr.py at them. See CHANGELOG.md, 2026-09-22.
 
     python scripts/patch_asr_tokenizers.py --out outputs/asr_patched
 

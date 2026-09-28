@@ -8,11 +8,11 @@ files as the conversation has turns, in order.
 
 Runs the `staged` pipeline (src/pipeline.run_staged): phase-major over the
 whole conversation, the way the evaluated DS6 run was produced. See
-CLAUDE.md's "Execution modes" for why -- the models do not fit together on
+README.md's "Execution modes" for why -- the models do not fit together on
 an 11 GB GPU.
 
-Prints resolved paths and versions before doing any work, per CLAUDE.md's
-"No silent fallbacks" rule -- a missing file, token, or unexpected shape
+Prints resolved paths and versions before doing any work, per this project's
+"no silent fallbacks" rule -- a missing file, token, or unexpected shape
 raises with a clear message rather than falling back to something plausible.
 """
 

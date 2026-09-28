@@ -141,7 +141,7 @@ def test_load_chunks_duplicate_id_raises(tmp_path):
 
 def test_load_chunks_skips_files_with_download_suffix(tmp_path):
     # "beta_chunks (1).json" does not end in "_chunks.json", so the glob
-    # silently skips it -- this is exactly the gotcha CLAUDE.md documents.
+    # silently skips it -- download suffixes must be stripped before loading.
     write_chunk_file(tmp_path / "alpha_chunks.json", [{"chunk_id": "a1"}])
     write_chunk_file(tmp_path / "beta_chunks (1).json", [{"chunk_id": "b1"}])
     with pytest.raises(RuntimeError, match="Expected 2 chunk files"):

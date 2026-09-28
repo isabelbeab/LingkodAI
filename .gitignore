@@ -234,3 +234,8 @@ reference/
 outputs/
 demo_audio/
 .env
+
+# CLAUDE.md is the AI-agent operating doc for this repo -- kept locally for
+# future Claude Code sessions, deliberately not published to the public repo.
+# README.md and CHANGELOG.md carry the human-facing content.
+CLAUDE.md

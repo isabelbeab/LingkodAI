@@ -30,7 +30,7 @@ READING THE RESULT
 ------------------
   ceb == fil == eng            sharing across the three ASR models is safe
   ceb == fil == eng == base    the LID encoder is also the same weights, though
-                               DECISIONS.md item 2 still keeps LID separate
+                               CHANGELOG.md still keeps LID separate
                                because of the fp32/fp16 difference, not identity
   any mismatch                 do not share. Report which pair differs and stop.
 
@@ -151,7 +151,7 @@ def main() -> int:
     print("\nVerdict")
     if len(asr_digests) == 1:
         print("  The three ASR encoders are byte identical.")
-        print("  Sharing one encoder across them is SAFE. See DECISIONS.md item 2")
+        print("  Sharing one encoder across them is SAFE. See CHANGELOG.md, 2026-09-22,")
         print("  for how to implement it: assign the shared module to")
         print("  model.model.encoder on CPU, then move each model to CUDA.")
         shared_ok = True
@@ -168,7 +168,7 @@ def main() -> int:
         if results["base"][0] in asr_digests:
             print("\n  The base openai/whisper-medium encoder matches as well, which")
             print("  confirms the fine-tunes left the encoder untouched. The audio LID")
-            print("  encoder still stays separate for now: DECISIONS.md keeps it in fp32")
+            print("  encoder still stays separate for now: it stays in fp32")
             print("  because its head was trained on fp32 outputs and its label locks the")
             print("  whole conversation. That is a numerics decision, not an identity one.")
         else:

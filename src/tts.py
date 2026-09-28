@@ -14,9 +14,9 @@ Text path: prep_tts_text, then per language:
   eng  verbalize_eng_prc
 
 Ported from reference/TTS files/LingkodAI_DS6_DS7_Synthesis.ipynb, cells 5-6
-(model load + locked reference speakers, synthesize()). CLAUDE.md's stage
-table names this reference/hk_ds6_ds7_synthesis.ipynb; that file arrived
-under a different path/name, confirmed to be the same notebook.
+(model load + locked reference speakers, synthesize()). An earlier plan
+named this reference/hk_ds6_ds7_synthesis.ipynb; that file arrived under a
+different path/name, confirmed to be the same notebook.
 
 The frozen initialism set (data/init_set_ds6.json, generated once by
 scripts/build_init_set.py) must be loaded, never derived per answer -- see
@@ -68,7 +68,7 @@ REF_PAD_SILENCE_SEC = 0.5
 
 # Locked reference clips, one per language. Filenames only: the audio is PLD
 # speaker audio under a research-only CC-BY-NC licence and is never committed.
-# It is read from local disk under TTS_REF_DIR (DECISIONS.md #8).
+# It is read from local disk under TTS_REF_DIR (CHANGELOG.md, 2026-09-21).
 REF_CLIP_FILENAMES = {
     "eng": "1904.141120.022212.0152.wav",
     "fil": "0052.110908.020820.0443.wav",  # 0443, not 0433

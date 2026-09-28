@@ -1,6 +1,6 @@
 """CPU-only smoke test for src/audio.py. subprocess.run and librosa.load are
 monkeypatched so this runs even when ffmpeg is not installed locally (it is a
-system dependency per CLAUDE.md, not guaranteed on HK's laptop) -- this checks
+system dependency, not a pip package, not guaranteed on HK's laptop) -- this checks
 the ffmpeg command construction and tempdir plumbing, not real decoding."""
 
 from __future__ import annotations

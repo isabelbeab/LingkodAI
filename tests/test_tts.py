@@ -190,7 +190,7 @@ def test_synthesize_turn_catches_raise_and_keeps_text_path(tmp_path):
     assert result.lang == "ceb"
 
 
-# --- reference clip config (DECISIONS.md #8) ---------------------------
+# --- reference clip config (CHANGELOG.md, 2026-09-21) -------------------
 
 
 def test_find_ref_clip_finds_nested_and_raises_when_missing(tmp_path):
