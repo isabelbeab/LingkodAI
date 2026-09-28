@@ -193,3 +193,12 @@ by the script.
 
 See `CHANGELOG.md` for the reasoning behind specific decisions, and each
 stage module's own docstring for its settings and source of truth.
+
+## Use of AI in building this prototype
+
+This prototype was built with extensive help from Anthropic's Claude AI and
+Claude Code, which we used as our main LLM throughout. We note this for
+transparency given we are not software engineers. As such, most of the
+packaging, containerization and pipeline engineering was learned along the
+way with Claude's help. Research and evaluation decisions were ours, and all
+code was checked against the source notebooks and outputs.
