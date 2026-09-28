@@ -1,7 +1,7 @@
 """CPU-only smoke test for src/pipeline.py. Never loads a real model for any
 stage -- each stage module already has its own smoke test (test_mt.py,
-test_rag.py, test_tts.py, and lid_audio/asr/lid_text are Bea's, untested
-here). This test only checks the wiring run_staged is responsible for:
+test_rag.py, test_tts.py, test_lid_audio.py, test_asr.py,
+test_lid_text.py). This test only checks the wiring run_staged is responsible for:
 audio/text LID running on turn 0 only, the locked final_lang propagating to
 every turn, per-turn ASR, RAG history accumulation, and a mid-run MT failure
 raising instead of silently continuing (the only designed fallbacks are

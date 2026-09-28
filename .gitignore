@@ -232,7 +232,10 @@ __marimo__/
 # --- e2e integration ---
 reference/
 outputs/
-demo_audio/
+# demo_audio/ contents are cloned-voice audio (research-only licence); only
+# .gitkeep is tracked so the CPU Dockerfile's COPY works on a fresh clone.
+demo_audio/*
+!demo_audio/.gitkeep
 .env
 
 # CLAUDE.md is the AI-agent operating doc for this repo -- kept locally for

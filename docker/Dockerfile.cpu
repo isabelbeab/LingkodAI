@@ -7,7 +7,7 @@
 #   - pre-rendered audio from recorded end-to-end conversations
 #
 # What does NOT run in here: audio LID, ASR, NLLB, the RAG LLM, Qwen3-TTS.
-# Those need a GPU. The app reaches them through GPU_BACKEND_URL if one exists.
+# Those need a GPU; see docker/Dockerfile.gpu.
 #
 # Build (from the repo root, note the -f path and the trailing dot):
 #   docker build -f docker/Dockerfile.cpu -t lingkodai-cpu .
@@ -17,8 +17,8 @@
 FROM python:3.12-slim
 
 # PYTHONDONTWRITEBYTECODE keeps .pyc files out of the image layers.
-# PYTHONUNBUFFERED makes print() reach the Fly log immediately instead of
-# sitting in a buffer, which matters when the only debugging you get is logs.
+# PYTHONUNBUFFERED makes print() reach the container log immediately instead
+# of sitting in a buffer.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -35,19 +35,19 @@ WORKDIR /app
 # Dependency layer first, source second. Docker caches each instruction as a
 # layer and reuses it when nothing above changed, so editing app code does not
 # re-run pip install. README.md is copied because setuptools reads it during the
-# metadata build.
+# metadata build. The app extra adds Streamlit, pinned once in pyproject.toml.
 COPY pyproject.toml README.md ./
-RUN pip install --no-cache-dir "." && pip install --no-cache-dir "streamlit>=1.32.0"
+RUN pip install --no-cache-dir ".[app]"
 
 COPY src/ ./src/
 COPY app/ ./app/
 COPY data/prc_chunks/ ./data/prc_chunks/
 COPY data/init_set_ds6.json ./data/init_set_ds6.json
 
-# demo_audio/ holds the pre-rendered conversations. It is gitignored (the voice
-# is a cloned research-corpus speaker under a research-only licence), so this
-# COPY needs the files staged locally before the build. Create the directory
-# even when empty so the build does not fail on a fresh clone.
+# demo_audio/ holds the pre-rendered conversations. Its contents are gitignored
+# (the voice is a cloned research-corpus speaker under a research-only licence),
+# so stage them locally before the build. Only demo_audio/.gitkeep is tracked,
+# which keeps this COPY working on a fresh clone.
 COPY demo_audio/ ./demo_audio/
 
 # The vendored TTS frontend modules import each other by bare top-level name
@@ -71,14 +71,10 @@ RUN mkdir -p /data/hf
 
 EXPOSE 8080
 
-# Streamlit defaults to 8501; Fly's http_service in fly.toml expects 8080.
-# headless=true stops it trying to open a browser. enableCORS=false and
-# enableXsrfProtection=false are needed behind Fly's proxy for the websocket
-# the Streamlit UI runs on.
+# Streamlit defaults to 8501; this image serves on 8080. headless=true stops it
+# trying to open a browser.
 CMD ["streamlit", "run", "app/streamlit_app.py", \
      "--server.port=8080", \
      "--server.address=0.0.0.0", \
      "--server.headless=true", \
-     "--server.enableCORS=false", \
-     "--server.enableXsrfProtection=false", \
      "--browser.gatherUsageStats=false"]

@@ -4,16 +4,6 @@ Hybrid retrieval (Harrier-oss-v1-0.6b dense + a hand-rolled BM25 sparse
 vector, fused via Qdrant DBSF) over the PRC chunk corpus, an LLM
 (Qwen3-4B-Instruct-2507, 4-bit) that selects 0-N candidates, and the same
 model generating the English answer.
-
-Ported from reference/francis_rag_pipeline.ipynb. LangChain's
-`RunnableWithMessageHistory` is dropped for a plain per-conversation history
-list -- it only ever stored a human/ai message list, which a plain list
-reproduces directly.
-
-Prompts, the system prompt, the character-budget constants, NO_MATCH_SENTINEL
-and PRC_CONTACT_FALLBACK are byte-identical to the notebook. Streaming and
-time-to-first-token instrumentation are Colab demo/eval scaffolding and are
-not ported -- the pipeline only needs the plain, greedy `generate_answer`.
 """
 
 from __future__ import annotations
@@ -442,9 +432,6 @@ def build_totals_note(chunk: dict) -> str:
     if total_time:
         lines.append(f"- Total Processing Time: {total_time}")
     if total_fee:
-        # Strip the redundant leading "Total Standard Fee: " label where present
-        # (single-condition services); multi-condition services embed their own
-        # per-line labels and are left as-is.
         FEE_PREFIX = "Total Standard Fee: "
         display_fee = total_fee[len(FEE_PREFIX):] if total_fee.startswith(FEE_PREFIX) else total_fee
         lines.append(f"- Total Fee: {display_fee}")
@@ -509,12 +496,7 @@ def retrieve_and_select(bundle: RAGBundle, query: str) -> tuple[list[dict], floa
     ordered list of chunk dicts, already length-capped for generation. An
     empty list means nothing passed selection, and the caller falls back to
     PRC_CONTACT_FALLBACK. retrieval_s/select_s are None for whichever stage
-    never ran.
-
-    CUDA cache is cleared between each stage, since memory fragmentation and
-    reference-cycle buildup across these back-to-back heavy calls is what
-    drives OOM risk here, especially across a multi-turn conversation's
-    several turns run in sequence."""
+    never ran."""
     t0 = time.perf_counter()
     top_candidates = hybrid_search(bundle, query, k=VERIFY_TOP_K)
     retrieval_s = time.perf_counter() - t0

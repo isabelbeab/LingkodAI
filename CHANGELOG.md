@@ -190,8 +190,9 @@ the whole conversation was misrouted: no MT, English answers, English voice.
 **Reason:** The ASR/LID author reviewed the rule directly: text LID runs on
 the actual transcript, which audio LID never sees, so it should win.
 
-**Decision:** Audio LID still picks the turn-1 ASR checkpoint, but text LID
-decides `final_lang` on disagreement. `was_overridden` is still recorded and
+**Decision:** Audio LID, run on the first turn, still picks the ASR
+checkpoint used for every turn, but text LID decides `final_lang` (used from
+MT in onward) on disagreement. `was_overridden` is still recorded and
 ASR is still not re-run. Implemented in `src/routing.py`. Confirmed
 2026-09-23: `final_lang` now matches DS6 for all three conversations.
 
@@ -207,3 +208,20 @@ handled.
 
 **Decision:** Keep the `APP_PASSWORD` gate and the on-page disclosure that the
 voice is a cloned research-corpus speaker. Closed.
+
+---
+
+## 2026-09-28 -- Fly.io demo hosting retired
+
+**Issue:** The CPU demo had been hosted on Fly.io, with an optional
+`GPU_BACKEND_URL` link to a separately hosted GPU backend for live answers.
+The GPU-backend split was abandoned after it proved unstable, which left a
+"Live pipeline" tab on the hosted page with nothing to call.
+
+**Reason:** The hosted demo no longer served a purpose the local CPU image and
+the standalone GPU demo (`app/gpu_chat_demo.py`) do not already cover, and a
+half-working public page is worse than none.
+
+**Decision:** Remove `fly.toml`, `app/gpu_backend_api.py`, the "Live pipeline"
+tab and `GPU_BACKEND_URL`. The CPU image is run locally with `docker run`.
+The Fly app itself is shut down separately.

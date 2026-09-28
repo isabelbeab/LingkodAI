@@ -1,68 +1,47 @@
-"""Presentation-only live demo. GPU required, torch/transformers imported
-directly (unlike app/streamlit_app.py, which must stay torch-free so the
-CPU/Fly image can build without them).
+"""Live GPU demo. GPU required; torch and transformers are imported directly
+(unlike app/streamlit_app.py, which stays torch-free so the CPU image can
+build without them).
 
-NOT part of docker/Dockerfile.cpu or docker/Dockerfile.gpu, not referenced by
-fly.toml. Run directly on a real GPU host (Colab A100) with `streamlit run
-app/gpu_chat_demo.py`, tunneled out with cloudflared (see
-reference/colab_streamlit_launcher.ipynb for the tunnel pattern this
-mirrors), torn down after use. Never describe this as a fourth shipped
-artifact.
-
-Standalone Streamlit app -- no Fly frontend, no GPU_BACKEND_URL. That split
-architecture was tried and abandoned the same day it was built (Fly kept
-restarting; not worth chasing down under deadline pressure) in favor of
-this simpler, single-process design: one Streamlit app IS the whole demo,
-same as the original version of this file.
+Not part of docker/Dockerfile.cpu or docker/Dockerfile.gpu and not one of the
+shipped artifacts: a standalone Streamlit app for showing the pipeline live on
+a large-VRAM GPU host (it was run on a 40GB A100), started with
+`streamlit run app/gpu_chat_demo.py` and torn down after use.
 
 Two input modes:
   - Text: stages 4-6 only (MT in -> RAG -> MT out), typed text in, text
-    answer back. This is the original version of this file, unchanged.
+    answer back.
   - Audio: stages 2 + 4-7 (ASR, MT in, RAG, MT out, TTS), an audio question
     in (either a pre-staged file from a dropdown, or a live microphone
-    recording via st.audio_input -- caller's choice, see below), transcript
-    + text answer + synthesized answer audio back. No audio LID (stage 1)
-    -- language is picked manually in a language selector either way, same
-    simplification the text mode already makes for GlotLID (there it's
-    optional auto-detect; here there is no live audio to run LID on ahead
-    of time in a way that would be safe to skip re-verifying, so it is
-    manual only). This also avoids needing to transfer
-    models/deeper_50chunks.pt (Bea's file) to this host.
+    recording via st.audio_input), transcript + text answer + synthesized
+    answer audio back. No audio LID (stage 1): the language is picked
+    manually in a language selector, the same simplification text mode makes
+    for GlotLID (optional auto-detect there, manual only here). This also
+    keeps models/deeper_50chunks.pt off the demo host.
 
-Audio mode's source is a choice, not a fixed decision: a dropdown of
-known-good pre-staged files is the lower-risk default for a live
-presentation (no room noise, no mic permission prompts, no surprise silent
-takes), and st.audio_input (live microphone recording, WAV bytes written to
-a temp file before running through the same pipeline) is there for a
-genuinely live moment when that risk is acceptable. Either way the actual
-compute -- ASR, translation, retrieval, generation, translation back,
-synthesis -- runs for real, live, when the button is clicked. Point
-DEMO_INPUT_AUDIO_DIR at a folder of audio files (a mounted Google Drive
-folder works well) and the dropdown lists whatever is in it -- add a new
-demo question by adding a file to Drive, no code change.
+The dropdown of known-good pre-staged files is the lower-risk default for a
+live audience (no room noise, no mic permission prompts, no silent takes);
+the microphone is there when that risk is acceptable. Either way the compute
+(ASR, translation, retrieval, generation, translation back, synthesis) runs
+for real when the button is clicked. Point DEMO_INPUT_AUDIO_DIR at a folder
+of audio files and the dropdown lists whatever is in it.
 
 Resident where it matters, lazy where it doesn't: mt.load() and rag.load()
-load once at first use and stay resident (st.cache_resource), matching the
-already-verified fix for the latency that broke the very first JOJIE live
-attempt. asr.load(lang) is cached per language (lazy: a language never
-selected in this session is never loaded), and tts.load() is cached once,
-lazy on first audio-mode use. On a 40GB A100 the combined worst case (NLLB
-+ RAG + all 3 ASR checkpoints + TTS all resident at once) is the one
-genuinely unmeasured number in this design -- check `nvidia-smi` after
-exercising all three languages once, same discipline as the JOJIE OOM
-investigation earlier this project.
+load once at first use and stay resident (st.cache_resource). asr.load(lang)
+is cached per language (a language never selected is never loaded), and
+tts.load() is cached once, on first audio-mode use. The combined worst case
+(NLLB + RAG + all 3 ASR checkpoints + TTS resident at once) is unmeasured;
+check `nvidia-smi` after exercising all three languages once.
 
-New environment requirements beyond the text-only version:
-  HF_TOKEN            required -- the ASR checkpoints are private.
-  ASR_CEB/FIL/ENG     required -- point at scripts/patch_asr_tokenizers.py's
-                      output; that script must be run first (produces local
-                      checkpoint copies, the patch is not baked into the HF
+Environment:
+  HF_TOKEN            required: the ASR checkpoints are private.
+  ASR_CEB/FIL/ENG     required: point at scripts/patch_asr_tokenizers.py's
+                      output; that script must be run first (it produces
+                      local checkpoint copies; the patch is not in the HF
                       repos). See CHANGELOG.md, 2026-09-22.
-  TTS_REF_DIR         required for audio mode -- the three locked reference
-                      clips, staged via Drive (HK's choice; download from
-                      JOJIE's TTS_REF_DIR, upload to Drive, mount it here).
-  DEMO_INPUT_AUDIO_DIR required for audio mode -- a folder of question audio
-                      files for the dropdown, same Drive-staging idea.
+  TTS_REF_DIR         required for audio mode: the three locked reference
+                      clips.
+  DEMO_INPUT_AUDIO_DIR required for audio mode: a folder of question audio
+                      files for the dropdown.
 """
 
 from __future__ import annotations
@@ -133,9 +112,8 @@ def print_environment() -> None:
 def run_turn(text: str, lang: str, history: list[rag.HistoryTurn]) -> dict:
     """One question through stages 4-6, using the resident models loaded
     once at first use. Each stage's actual output prints inline (expanded
-    status, not just a timing label) as soon as that stage finishes --
-    a presentation showing how the pipeline works, not just its final
-    answer. Returns a dict of everything worth showing; raises only if a
+    status, not just a timing label) as soon as that stage finishes, to
+    show how the pipeline works, not just its final answer. Returns a dict of everything worth showing; raises only if a
     stage itself raises unexpectedly (caught by the caller)."""
     result: dict = {"native_query": text, "final_lang": lang}
     mt_bundle = load_mt()
@@ -245,7 +223,7 @@ def main() -> None:
     st.set_page_config(page_title="LingkodAI (live)", page_icon="🇵🇭", layout="wide")
     st.title("LingkodAI -- live demo")
     st.caption(
-        "Presentation-only live demo, standalone on a real GPU host. Text or "
+        "Live demo on a GPU host. Text or "
         "audio in, real translation + retrieval + generation (+ synthesis for "
         "audio) back. Models load once at first use and stay resident, so "
         "only the first use of each language/mode is slow."

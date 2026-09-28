@@ -7,7 +7,7 @@ it cannot change) expects a dict there and fails with
     AttributeError: 'list' object has no attribute 'keys'
 A list of special tokens belongs under `additional_special_tokens`.
 
-src/asr.py is Bea's file and stays untouched. It already reads ASR_CEB, ASR_FIL
+src/asr.py is owned by the ASR/LID author and stays untouched. It already reads ASR_CEB, ASR_FIL
 and ASR_ENG, so this script builds a patched copy of each checkpoint folder
 (weights symlinked from the HF cache, only tokenizer_config.json rewritten) and
 prints the exports that point asr.py at them. See CHANGELOG.md, 2026-09-22.

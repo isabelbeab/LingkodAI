@@ -2,13 +2,13 @@
 
 LingkodAI is a proof-of-concept multilingual voice assistant that answers
 spoken questions about Philippine government services. As a start, its
-knowledge base covers Professional Regulation Commission (PRC) services. A citizen speaks Cebuano (`ceb`), Filipino (`fil`)
-or English (`eng`); the system replies with synthesized speech in the same
-language. Scope: Scenario 2 (language identification on), multi-turn
+knowledge base covers Professional Regulation Commission (PRC) services. A
+citizen speaks Cebuano (`ceb`), Filipino (`fil`) or English (`eng`); the
+system replies with synthesized speech in the same language. Scope: Scenario 2 (language identification on), multi-turn
 conversations.
 
-This is a containerized, reproducible pipeline with a hosted front end, not a
-production deployment. Each stage module documents its own settings and
+This is a containerized, reproducible research pipeline with a CPU demo
+front end, not a production system. Each stage module documents its own settings and
 source of truth in its docstring (`src/mt.py`, `src/rag.py`, `src/tts.py`,
 `src/routing.py`, ...); `CHANGELOG.md` records the reasoning behind
 decisions that took discussion, in the order they were made.
@@ -22,8 +22,8 @@ Every turn runs through, in order:
 3. Text LID and routing - confirm or override the language, lock it for
    the conversation.
 4. MT in - native language to English (`eng` passes through unchanged).
-5. RAG - rewrite follow-ups, hybrid retrieval, LLM chunk selection,
-   English answer.
+5. RAG - rewrite follow-ups, hybrid retrieval + chunk selection, English
+   answer.
 6. MT out - English answer to the conversation language (`eng` passes
    through).
 7. TTS - speak the native answer.
@@ -38,10 +38,10 @@ Three artifacts, all built from this one repo:
 1. **The package plus CLI** (`scripts/run_conversation.py`): audio files in,
    per-turn JSON and WAV out. This is the real system and the thing the
    golden check runs against.
-2. **The CPU image**: a slim container with no torch, for a public demo.
+2. **The CPU image**: a slim, password-gated demo container with no torch.
    It runs the text frontend and GlotLID text language identification
    live, and serves pre-rendered audio from recorded end-to-end
-   conversations. Hosting platform is not yet decided.
+   conversations. It runs locally (see below); it is not hosted anywhere.
 3. **The GPU image**: the full pipeline containerized. It is built and
    import-checked locally, but verified for real only on JOJIE through the
    `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
@@ -56,7 +56,7 @@ alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
   whole scripted conversation, the way the evaluated DS6 run was produced.
   Each phase loads its models once, processes every turn, then frees them
   (`del`, `gc.collect()`, `torch.cuda.empty_cache()`):
-  1. audio LID, ASR, text LID and routing, all turns
+  1. audio LID and text LID on the first turn, ASR on all turns, routing
   2. MT in, all turns
   3. RAG, turn by turn in order (follow-up rewriting needs earlier English
      answers)
@@ -66,9 +66,9 @@ alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
   Implemented in `src/pipeline.py` (`run_staged`). This is the runner
   `scripts/run_conversation.py` and the golden check both use.
 - **`resident`** (40GB or larger): everything loaded once, a per-turn API for
-  an interactive app. A stretch goal, not implemented here -- build it only
-  after `staged` passes the golden check. `app/gpu_backend_api.py` is a
-  prototype of this shape for a large-VRAM host.
+  an interactive app. A stretch goal, not implemented in the pipeline
+  runner. `app/gpu_chat_demo.py` is a standalone live demo of this shape
+  for a large-VRAM host, outside the shipped artifacts.
 
 ## Quickstart: the CLI
 
@@ -85,7 +85,7 @@ develop and test with fakes locally (see Testing below), and run for real
 only on a machine that actually has one.
 
 Output: one `manifest.json` (turn count, locked `final_lang`, whether
-routing overrode text LID), one `turn_N.json` per turn (transcript, English
+routing overrode audio LID), one `turn_N.json` per turn (transcript, English
 query, English answer, native answer, chunk ids, and whether each stage
 succeeded), and one `turn_N.wav` per turn where synthesis succeeded.
 
@@ -128,7 +128,7 @@ seven models) and download to `/data/hf` on first boot.
 Copy `.env.example` to `.env` and fill it in; `.env` is gitignored and must
 never be committed. See that file for what each variable is for.
 
-Three conda/pip extras, defined in `pyproject.toml`:
+Four pip extras, defined in `pyproject.toml`:
 
 - base (no extra): the CPU-only, text-only core -- the TTS text frontend,
   text language identification, and the chunk loader. No torch.
@@ -136,6 +136,8 @@ Three conda/pip extras, defined in `pyproject.toml`:
 - `gpu`: the full pipeline. torch and torchaudio are deliberately absent
   from `pyproject.toml` (the correct CUDA build differs per machine) --
   install them first, matching the target GPU, then `pip install -e ".[gpu]"`.
+- `eval`: scoring libraries for the golden check.
+- `dev`: pytest.
 
 On JOJIE: one conda env, `lingkod-e2e`, Python 3.12, built from this repo's
 `pyproject.toml`. Never install into any other `lingkod-*` env.
@@ -174,8 +176,8 @@ by the script.
 ## Contributing
 
 - `src/audio.py`, `src/lid_audio.py`, `src/asr.py`, `src/lid_text.py` and
-  `models/` belong to Bea. Do not edit them; a workaround belongs in a new
-  file.
+  `models/` belong to the ASR/LID author. Do not edit them; a workaround
+  belongs in a new file.
 - `src/tts_frontend/` is vendored verbatim from JOJIE and must not be
   edited either. See `src/tts_frontend/VENDORED.md`.
 - New stage modules are ports, not redesigns: same models, prompts,

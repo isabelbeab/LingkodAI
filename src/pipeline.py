@@ -52,8 +52,9 @@ class TurnRecord:
     turn_idx: int
     audio_path: str
 
-    # Stage 1 -- audio LID. Only turn 0 gets real values; every other turn
-    # inherits the conversation's locked final_lang instead.
+    # Stage 1 -- audio LID, run on the first turn only. Only turn 0 stores
+    # these; later turns leave them None, though every turn is transcribed
+    # with turn 0's pred_lang checkpoint.
     pred_lang: str | None = None
     lid_confidence: float | None = None
 

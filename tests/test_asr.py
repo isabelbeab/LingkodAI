@@ -1,9 +1,8 @@
 """CPU-only smoke test for src/asr.py's ASRBundle.transcribe(). Never loads a
 real Whisper checkpoint or touches the network -- fakes stand in for the
 processor and model. load()/_build_ceb()/_build_native() are not exercised
-here since they require a real HF download, which the laptop must not do:
-no downloading or loading real models on HK's laptop, real GPU runs happen
-on JOJIE only."""
+here since they require a real HF download; the test suite never downloads
+or loads real models, and real GPU runs happen on JOJIE only."""
 
 from __future__ import annotations
 

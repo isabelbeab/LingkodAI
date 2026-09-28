@@ -11,7 +11,8 @@ description = "Multilingual speech-to-speech pipeline for Philippine PRC citizen
 # Base dependencies are the CPU-only, text-only core: the TTS text frontend,
 # text language identification, and the chunk loader. Nothing here pulls in
 # torch. This is what the CPU demo image installs, and it is why that image
-# stays around 200 MB.
+# stays about 600 MB (measured 2026-09-28, mostly numpy, pandas and Streamlit)
+# rather than the many GB a torch image needs.
 #
 # fasttext-numpy2, NOT fasttext or fasttext-wheel: upstream predict() calls
 # np.array(probs, copy=False), which NumPy 2 rejects. fasttext-numpy2 ships the
