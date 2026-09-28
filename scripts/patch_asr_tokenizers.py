@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Make the three ASR checkpoints loadable under transformers 4.57.3.
 
-The beabucayan/lingkodai-whisper-{ceb,fil,eng} repos store `extra_special_tokens`
+The lingkodai/lingkodai-whisper-{ceb,fil,eng} repos (moved from the ASR author's
+personal account on 2026-09-28, files unchanged) store `extra_special_tokens`
 in tokenizer_config.json as a LIST. transformers 4.57.3 (pinned by qwen-tts, so
 it cannot change) expects a dict there and fails with
     AttributeError: 'list' object has no attribute 'keys'
@@ -29,9 +30,9 @@ import sys
 from pathlib import Path
 
 REPOS = {
-    "ceb": "beabucayan/lingkodai-whisper-ceb",
-    "fil": "beabucayan/lingkodai-whisper-fil",
-    "eng": "beabucayan/lingkodai-whisper-eng",
+    "ceb": "lingkodai/lingkodai-whisper-ceb",
+    "fil": "lingkodai/lingkodai-whisper-fil",
+    "eng": "lingkodai/lingkodai-whisper-eng",
 }
 BASE_REPO = "openai/whisper-medium"
 CEB_TOKEN = "<|cebuano|>"

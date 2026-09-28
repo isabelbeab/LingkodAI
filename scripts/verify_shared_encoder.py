@@ -62,9 +62,9 @@ import torch
 from transformers import WhisperForConditionalGeneration
 
 DEFAULT_REPOS = {
-    "ceb": "beabucayan/lingkodai-whisper-ceb",
-    "fil": "beabucayan/lingkodai-whisper-fil",
-    "eng": "beabucayan/lingkodai-whisper-eng",
+    "ceb": "lingkodai/lingkodai-whisper-ceb",
+    "fil": "lingkodai/lingkodai-whisper-fil",
+    "eng": "lingkodai/lingkodai-whisper-eng",
     "base": "openai/whisper-medium",
 }
 
