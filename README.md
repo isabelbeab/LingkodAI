@@ -1,7 +1,8 @@
 # LingkodAI
 
-LingkodAI answers spoken questions about Philippine Professional Regulation
-Commission (PRC) services. A citizen speaks Cebuano (`ceb`), Filipino (`fil`)
+LingkodAI is a proof-of-concept multilingual voice assistant that answers
+spoken questions about Philippine government services. As a start, its
+knowledge base covers Professional Regulation Commission (PRC) services. A citizen speaks Cebuano (`ceb`), Filipino (`fil`)
 or English (`eng`); the system replies with synthesized speech in the same
 language. Scope: Scenario 2 (language identification on), multi-turn
 conversations.
@@ -16,16 +17,16 @@ decisions that took discussion, in the order they were made.
 
 Every turn runs through, in order:
 
-1. Audio LID -- predict the spoken language from the audio.
-2. ASR -- transcribe with that language's fine-tuned Whisper.
-3. Text LID and routing -- confirm or override the language, lock it for
+1. Audio LID - predict the spoken language from the audio.
+2. ASR - transcribe with that language's fine-tuned Whisper.
+3. Text LID and routing - confirm or override the language, lock it for
    the conversation.
-4. MT in -- native language to English (`eng` passes through unchanged).
-5. RAG -- rewrite follow-ups, hybrid retrieval, LLM chunk selection,
+4. MT in - native language to English (`eng` passes through unchanged).
+5. RAG - rewrite follow-ups, hybrid retrieval, LLM chunk selection,
    English answer.
-6. MT out -- English answer to the conversation language (`eng` passes
+6. MT out - English answer to the conversation language (`eng` passes
    through).
-7. TTS -- speak the native answer.
+7. TTS - speak the native answer.
 
 Language identification runs once per conversation, at turn 1, and is then
 locked for every later turn -- not re-decided per turn.
@@ -40,7 +41,7 @@ Three artifacts, all built from this one repo:
 2. **The CPU image**: a slim container with no torch, for a public demo.
    It runs the text frontend and GlotLID text language identification
    live, and serves pre-rendered audio from recorded end-to-end
-   conversations. Hosting platform is not yet decided; see `CHANGELOG.md`.
+   conversations. Hosting platform is not yet decided.
 3. **The GPU image**: the full pipeline containerized. It is built and
    import-checked locally, but verified for real only on JOJIE through the
    `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
