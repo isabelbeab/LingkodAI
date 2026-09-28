@@ -3,7 +3,7 @@
 
 WHY THIS EXISTS
 ---------------
-Bea's guidance is that the audio LID encoder and all three STT encoders are
+The working assumption was that the audio LID encoder and all three STT encoders are
 frozen, so the pipeline could hold one encoder instead of four. That is true
 only if "frozen" meant frozen DURING FINE-TUNING, so the encoder weights were
 never updated and each checkpoint still carries the original
@@ -39,12 +39,9 @@ USAGE
     conda activate lingkod-e2e
     python scripts/verify_shared_encoder.py
 
-If the repos are gated, pass a read token:
-
-    python scripts/verify_shared_encoder.py --token hf_yourTokenHere
-
-Note that hf_yourTokenHere above is a PLACEHOLDER. Replace the whole thing with
-a real token, and do not type the word placeholder or any angle brackets.
+The ASR repos are private: set HF_TOKEN in the environment first (see
+.env.example). Hugging Face reads it from there; it is deliberately not a
+command-line flag, so the token never lands in shell history.
 
 To check local checkpoint directories instead of the Hub:
 
@@ -114,7 +111,6 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--token", default=None, help="Hugging Face read token, if the repos are gated")
     ap.add_argument("--ceb", default=DEFAULT_REPOS["ceb"])
     ap.add_argument("--fil", default=DEFAULT_REPOS["fil"])
     ap.add_argument("--eng", default=DEFAULT_REPOS["eng"])
@@ -134,7 +130,7 @@ def main() -> int:
     for name, repo in targets.items():
         print(f"  {name:<5} loading {repo} ...", flush=True)
         try:
-            results[name] = fingerprint_encoder(repo, token=args.token)
+            results[name] = fingerprint_encoder(repo)
         except Exception as exc:
             print(f"\nFAILED to load {name} ({repo}): {exc}", file=sys.stderr)
             print("Stopping. A partial comparison is worse than none.", file=sys.stderr)
@@ -168,7 +164,7 @@ def main() -> int:
         if results["base"][0] in asr_digests:
             print("\n  The base openai/whisper-medium encoder matches as well, which")
             print("  confirms the fine-tunes left the encoder untouched. The audio LID")
-            print("  encoder still stays separate for now: it stays in fp32")
+            print("  encoder still stays separate: it stays in fp32")
             print("  because its head was trained on fp32 outputs and its label locks the")
             print("  whole conversation. That is a numerics decision, not an identity one.")
         else:

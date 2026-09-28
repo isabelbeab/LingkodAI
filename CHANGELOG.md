@@ -207,3 +207,20 @@ handled.
 
 **Decision:** Keep the `APP_PASSWORD` gate and the on-page disclosure that the
 voice is a cloned research-corpus speaker. Closed.
+
+---
+
+## 2026-09-28 -- Fly.io demo hosting retired
+
+**Issue:** The CPU demo had been hosted on Fly.io, with an optional
+`GPU_BACKEND_URL` link to a separately hosted GPU backend for live answers.
+The GPU-backend split was abandoned after it proved unstable, which left a
+"Live pipeline" tab on the hosted page with nothing to call.
+
+**Reason:** The hosted demo no longer served a purpose the local CPU image and
+the standalone GPU demo (`app/gpu_chat_demo.py`) do not already cover, and a
+half-working public page is worse than none.
+
+**Decision:** Remove `fly.toml`, `app/gpu_backend_api.py`, the "Live pipeline"
+tab and `GPU_BACKEND_URL`. The CPU image is run locally with `docker run`.
+The Fly app itself is shut down separately.

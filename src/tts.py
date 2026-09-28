@@ -189,7 +189,7 @@ def load(
     qwen_tts is imported here, not at module level: its torchaudio
     dependency pulls in a CUDA extension that only loads on a real GPU
     machine, so importing it at module level would break `import src.tts`
-    (and the CPU-only smoke tests) on HK's laptop.
+    (and the CPU-only smoke tests) on a machine without a GPU.
     """
     from qwen_tts import Qwen3TTSModel
 

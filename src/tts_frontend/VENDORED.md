@@ -1,6 +1,6 @@
 # Vendored TTS text-frontend files
 
-These nine files are copied verbatim from HK's TTS work on JOJIE (see
+These nine files are copied verbatim from the TTS author's work on JOJIE (see
 `reference/TTS files/scripts/` for the originals). Never edit them; a
 workaround belongs in a new file, same as any other "do not edit" module in
 this repo. They import each other by top-level name, so callers put

@@ -1,6 +1,6 @@
 """LingkodAI CPU demo (Streamlit). No torch imports anywhere in this file or
-anything it imports -- this is what makes the CPU image possible (target
-size around 200 MB, no CUDA, no model weights baked in). See
+anything it imports -- this is what makes the CPU image possible (image
+size about 600 MB, no CUDA, no model weights baked in). See
 docker/Dockerfile.cpu and README.md's "What ships" #2.
 
 What runs live in here, on CPU:
@@ -10,15 +10,10 @@ What runs live in here, on CPU:
     spell-out, CEB segmentation and pause planning), previewing the text
     LingkodAI would hand to the voice model, without actually running it
 
-What does NOT run in here directly: audio LID, ASR, NLLB, the RAG LLM,
-Qwen3-TTS. Those need a GPU. This page browses pre-rendered audio from real
-end-to-end conversations recorded on JOJIE (demo_audio/), previews the text
-frontend live, and -- when GPU_BACKEND_URL is set -- calls a real GPU
-backend (app/gpu_backend_api.py, run separately on a real GPU host, e.g.
-Colab) over HTTP for a live pipeline. No torch import here either way: the
-call is a plain requests.post(), same as any other HTTP client. This Fly
-app is still the CPU-only frontend, the GPU work happens elsewhere
-entirely.
+What does NOT run in here: audio LID, ASR, NLLB, the RAG LLM, Qwen3-TTS.
+Those need a GPU. This page browses pre-rendered audio from real end-to-end
+conversations recorded on JOJIE (demo_audio/) and previews the text frontend
+live.
 
 demo_audio/<conversation_name>/ is exactly one scripts/run_conversation.py
 output directory (manifest.json + turn_N.json + turn_N.wav), copied in
@@ -27,7 +22,7 @@ invented for this page.
 
 The demo plays synthesized speech in a cloned PLD research speaker's voice
 (CC-BY-NC, research-only licence), which is why the page is password-gated
-and discloses the voice below (see README.md's Fly deployment section).
+and discloses the voice below (see README.md, "Running the CPU demo locally").
 """
 
 from __future__ import annotations
@@ -37,7 +32,6 @@ import os
 import sys
 from pathlib import Path
 
-import requests
 import streamlit as st
 
 # The vendored TTS frontend modules import each other by top-level name
@@ -168,9 +162,6 @@ def render_frontend_tab() -> None:
         "would be spoken, not audio -- synthesis itself needs a GPU."
     )
 
-    if os.environ.get("GPU_BACKEND_URL"):
-        st.caption("A GPU backend is configured -- see the \"Live pipeline\" tab for real translation and answers.")
-
     text = st.text_area("Text to preview", placeholder="Type a PRC-related answer here...", height=120)
     lang_choice = st.radio(
         "Language", ["Auto-detect (GlotLID)", "Cebuano", "Filipino", "English"], horizontal=True
@@ -212,62 +203,6 @@ def render_frontend_tab() -> None:
             st.warning(f"The frontend raised on this text: {exc}")
 
 
-# --- Live pipeline, via GPU_BACKEND_URL --------------------------------------
-def render_live_tab() -> None:
-    """Calls a real GPU backend (app/gpu_backend_api.py) over plain HTTP for
-    real translation + retrieval + generation + translation back. No torch
-    import here -- requests is a plain HTTP client, same as any other. Only
-    meaningful when GPU_BACKEND_URL is set to a reachable backend; otherwise
-    shows why not, same "no silent fallback" spirit as the rest of this app.
-    """
-    gpu_backend = os.environ.get("GPU_BACKEND_URL")
-    if not gpu_backend:
-        st.info(
-            "GPU_BACKEND_URL is not set, so this tab has nothing to call. "
-            "This Fly app is CPU-only by design -- see app/gpu_backend_api.py "
-            "for the backend this would reach, run separately on a real GPU host."
-        )
-        return
-
-    try:
-        health = requests.get(f"{gpu_backend}/health", timeout=5)
-        health.raise_for_status()
-        loaded = health.json().get("loaded", False)
-    except requests.exceptions.RequestException as exc:
-        st.error(f"GPU backend at {gpu_backend} is not reachable: {exc}")
-        return
-
-    if not loaded:
-        st.warning("GPU backend is reachable but still loading its models -- try again shortly.")
-        return
-
-    st.caption(f"Connected to a live GPU backend at {gpu_backend}. Text in, real answer back -- no audio yet.")
-
-    text = st.text_area("Your question", placeholder="Type a question here...", height=100, key="live_text")
-    lang_choice = st.radio("Language", ["Cebuano", "Filipino", "English"], horizontal=True, key="live_lang")
-
-    if st.button("Ask", type="primary", disabled=not text.strip()):
-        lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
-        try:
-            with st.spinner("Translating, retrieving, generating, translating back..."):
-                resp = requests.post(
-                    f"{gpu_backend}/chat", data={"lang": lang, "text": text}, timeout=60
-                )
-                resp.raise_for_status()
-        except requests.exceptions.RequestException as exc:
-            st.error(f"Request to the GPU backend failed: {exc}")
-            return
-
-        result = resp.json()
-        st.markdown(f"**English:** {result['english_answer']}")
-        if lang != "eng":
-            st.markdown(f"**{LANG_NAMES[lang]}:** {result['native_answer']}")
-        if result["chunk_ids"]:
-            st.caption("Chunks used: " + ", ".join(result["chunk_ids"]))
-        else:
-            st.caption("No matching PRC service found.")
-
-
 # --- Password gate ---------------------------------------------------------
 def require_password() -> bool:
     app_password = os.environ.get("APP_PASSWORD")
@@ -303,18 +238,14 @@ def main() -> None:
     st.caption(
         "A voice assistant for Philippine Professional Regulation Commission (PRC) "
         "services, in Cebuano, Filipino, or English. This is a containerized, "
-        "reproducible pipeline with a hosted front end -- not a production system."
+        "reproducible research pipeline, not a production system."
     )
 
-    demo_tab, frontend_tab, live_tab = st.tabs(
-        ["Recorded conversations", "Try the text frontend", "Live pipeline"]
-    )
+    demo_tab, frontend_tab = st.tabs(["Recorded conversations", "Try the text frontend"])
     with demo_tab:
         render_demo_tab()
     with frontend_tab:
         render_frontend_tab()
-    with live_tab:
-        render_live_tab()
 
 
 if __name__ == "__main__":

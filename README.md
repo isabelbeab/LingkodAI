@@ -2,13 +2,13 @@
 
 LingkodAI is a proof-of-concept multilingual voice assistant that answers
 spoken questions about Philippine government services. As a start, its
-knowledge base covers Professional Regulation Commission (PRC) services. A citizen speaks Cebuano (`ceb`), Filipino (`fil`)
-or English (`eng`); the system replies with synthesized speech in the same
-language. Scope: Scenario 2 (language identification on), multi-turn
+knowledge base covers Professional Regulation Commission (PRC) services. A
+citizen speaks Cebuano (`ceb`), Filipino (`fil`) or English (`eng`); the
+system replies with synthesized speech in the same language. Scope: Scenario 2 (language identification on), multi-turn
 conversations.
 
-This is a containerized, reproducible pipeline with a hosted front end, not a
-production deployment. Each stage module documents its own settings and
+This is a containerized, reproducible research pipeline with a CPU demo
+front end, not a production system. Each stage module documents its own settings and
 source of truth in its docstring (`src/mt.py`, `src/rag.py`, `src/tts.py`,
 `src/routing.py`, ...); `CHANGELOG.md` records the reasoning behind
 decisions that took discussion, in the order they were made.
@@ -38,10 +38,10 @@ Three artifacts, all built from this one repo:
 1. **The package plus CLI** (`scripts/run_conversation.py`): audio files in,
    per-turn JSON and WAV out. This is the real system and the thing the
    golden check runs against.
-2. **The CPU image**: a slim container with no torch, for a public demo.
+2. **The CPU image**: a slim, password-gated demo container with no torch.
    It runs the text frontend and GlotLID text language identification
    live, and serves pre-rendered audio from recorded end-to-end
-   conversations. Hosting platform is not yet decided.
+   conversations. It runs locally (see below); it is not hosted anywhere.
 3. **The GPU image**: the full pipeline containerized. It is built and
    import-checked locally, but verified for real only on JOJIE through the
    `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
@@ -66,9 +66,9 @@ alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
   Implemented in `src/pipeline.py` (`run_staged`). This is the runner
   `scripts/run_conversation.py` and the golden check both use.
 - **`resident`** (40GB or larger): everything loaded once, a per-turn API for
-  an interactive app. A stretch goal, not implemented here -- build it only
-  after `staged` passes the golden check. `app/gpu_backend_api.py` is a
-  prototype of this shape for a large-VRAM host.
+  an interactive app. A stretch goal, not implemented in the pipeline
+  runner. `app/gpu_chat_demo.py` is a standalone live demo of this shape
+  for a large-VRAM host, outside the shipped artifacts.
 
 ## Quickstart: the CLI
 
@@ -128,7 +128,7 @@ seven models) and download to `/data/hf` on first boot.
 Copy `.env.example` to `.env` and fill it in; `.env` is gitignored and must
 never be committed. See that file for what each variable is for.
 
-Three conda/pip extras, defined in `pyproject.toml`:
+Four pip extras, defined in `pyproject.toml`:
 
 - base (no extra): the CPU-only, text-only core -- the TTS text frontend,
   text language identification, and the chunk loader. No torch.
@@ -136,6 +136,8 @@ Three conda/pip extras, defined in `pyproject.toml`:
 - `gpu`: the full pipeline. torch and torchaudio are deliberately absent
   from `pyproject.toml` (the correct CUDA build differs per machine) --
   install them first, matching the target GPU, then `pip install -e ".[gpu]"`.
+- `eval`: scoring libraries for the golden check.
+- `dev`: pytest.
 
 On JOJIE: one conda env, `lingkod-e2e`, Python 3.12, built from this repo's
 `pyproject.toml`. Never install into any other `lingkod-*` env.
