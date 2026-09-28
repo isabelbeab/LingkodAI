@@ -22,8 +22,8 @@ Every turn runs through, in order:
 3. Text LID and routing - confirm or override the language, lock it for
    the conversation.
 4. MT in - native language to English (`eng` passes through unchanged).
-5. RAG - rewrite follow-ups, hybrid retrieval, LLM chunk selection,
-   English answer.
+5. RAG - rewrite follow-ups, hybrid retrieval + chunk selection, English
+   answer.
 6. MT out - English answer to the conversation language (`eng` passes
    through).
 7. TTS - speak the native answer.
@@ -56,7 +56,7 @@ alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
   whole scripted conversation, the way the evaluated DS6 run was produced.
   Each phase loads its models once, processes every turn, then frees them
   (`del`, `gc.collect()`, `torch.cuda.empty_cache()`):
-  1. audio LID, ASR, text LID and routing, all turns
+  1. audio LID and text LID on the first turn, ASR on all turns, routing
   2. MT in, all turns
   3. RAG, turn by turn in order (follow-up rewriting needs earlier English
      answers)
@@ -85,7 +85,7 @@ develop and test with fakes locally (see Testing below), and run for real
 only on a machine that actually has one.
 
 Output: one `manifest.json` (turn count, locked `final_lang`, whether
-routing overrode text LID), one `turn_N.json` per turn (transcript, English
+routing overrode audio LID), one `turn_N.json` per turn (transcript, English
 query, English answer, native answer, chunk ids, and whether each stage
 succeeded), and one `turn_N.wav` per turn where synthesis succeeded.
 
@@ -176,8 +176,8 @@ by the script.
 ## Contributing
 
 - `src/audio.py`, `src/lid_audio.py`, `src/asr.py`, `src/lid_text.py` and
-  `models/` belong to Bea. Do not edit them; a workaround belongs in a new
-  file.
+  `models/` belong to the ASR/LID author. Do not edit them; a workaround
+  belongs in a new file.
 - `src/tts_frontend/` is vendored verbatim from JOJIE and must not be
   edited either. See `src/tts_frontend/VENDORED.md`.
 - New stage modules are ports, not redesigns: same models, prompts,

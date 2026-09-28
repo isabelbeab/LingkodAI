@@ -190,8 +190,9 @@ the whole conversation was misrouted: no MT, English answers, English voice.
 **Reason:** The ASR/LID author reviewed the rule directly: text LID runs on
 the actual transcript, which audio LID never sees, so it should win.
 
-**Decision:** Audio LID still picks the turn-1 ASR checkpoint, but text LID
-decides `final_lang` on disagreement. `was_overridden` is still recorded and
+**Decision:** Audio LID, run on the first turn, still picks the ASR
+checkpoint used for every turn, but text LID decides `final_lang` (used from
+MT in onward) on disagreement. `was_overridden` is still recorded and
 ASR is still not re-run. Implemented in `src/routing.py`. Confirmed
 2026-09-23: `final_lang` now matches DS6 for all three conversations.
 

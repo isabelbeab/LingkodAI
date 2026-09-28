@@ -1,22 +1,16 @@
 """Stage 3 -- Routing decision and conversation language lock.
 
-Audio LID (stage 1) picks the ASR checkpoint. This ordering is forced, not
-chosen: ASR cannot run until a checkpoint is picked, and a checkpoint cannot
-be picked from a transcript that does not exist yet -- so the ASR checkpoint
-for turn 1 is always audio LID's choice, even under a later override.
+Audio LID (stage 1) runs on the first turn's audio and picks the ASR
+checkpoint for every turn, which routes the audio to the corresponding
+STT model.
 
-Text LID (stage 3's own model, src/lid_text.py) wins on disagreement for
-`final_lang`: when it disagrees with audio LID, the disagreement is recorded
-as `was_overridden`, and `final_lang` locks to text LID's label, not audio
-LID's. Text LID runs on the actual transcript, which audio LID cannot see.
-ASR is not re-run under the new language.
+Text LID (src/lid_text.py) runs on the first turn's transcript and wins on
+disagreement: `final_lang` locks to its label and the disagreement is
+recorded as `was_overridden`. ASR is not re-run; the override applies from
+MT in onward.
 
-LID decides the conversation's language exactly once, on turn 1. The decision
-is locked for every later turn; a wrong first-turn call misroutes the whole
-conversation by design -- there is no per-turn correction.
-
-Decided in CHANGELOG.md, 2026-09-22: this replaces an earlier rule (audio
-LID always wins) after review by the ASR/LID author.
+The decision is made only on the first turn of each conversation and is
+used for the rest of the turns.
 """
 
 from __future__ import annotations
@@ -58,11 +52,11 @@ def decide(pred_lang: str, text_lang: str | None) -> RoutingResult:
 
 @dataclass
 class ConversationRouting:
-    """Locks a conversation's language from turn 1's RoutingResult.
+    """Locks a conversation's language from the first turn's RoutingResult.
 
-    Every stage past turn 1 -- MT, RAG, MT out, TTS, and even ASR checkpoint
-    selection for turn 2 onward -- reads `final_lang` from here rather than
-    re-running LID. LID decides the conversation's language exactly once."""
+    MT in, RAG, MT out and TTS read `final_lang` from here for every turn.
+    ASR does not: every turn uses the checkpoint audio LID picked on the
+    first turn. LID decides the conversation's language exactly once."""
 
     result: RoutingResult
 
