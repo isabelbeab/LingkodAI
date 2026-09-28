@@ -5,14 +5,6 @@ chunking at 800 characters, batched translation (batch size 8, chunks
 flattened across turns), greedy decoding: `generate()` receives only
 `forced_bos_token_id` and `max_new_tokens`, nothing else. Identical settings
 both directions.
-
-On a whole-batch failure, translation retries per chunk so partial progress
-isn't lost. A turn counts as successful only if it gets back the same number
-of chunks it was split into.
-
-Ported from reference/bea_stage4_mt_multi_turn.ipynb (native -> English) and
-reference/bea_stage5_backtranslate_w_lid.ipynb (English -> native), which use
-an identical chunk-batch-reassemble pattern in both directions.
 """
 
 from __future__ import annotations
