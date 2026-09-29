@@ -255,3 +255,12 @@ LID head is still loaded from the committed `models/deeper_50chunks.pt`, at the
 ASR author's call: the org copy is an archive, and `src/lid_audio.py` is
 unchanged. The tokenizer patch (2026-09-22 entry) still applies, since the org
 copies carry the same unpatched `tokenizer_config.json`.
+
+**Verified 2026-09-29 on JOJIE (CPU only, no GPU assigned):**
+`scripts/patch_asr_tokenizers.py --out outputs/asr_patched_org` downloaded and
+patched all three org repos (ceb 51,866 tokens with the custom token at 51865;
+fil and eng 51,865; 107 base special tokens match in each), at the same org
+commits listed above. `scripts/ab_asr_checkpoints.py` then transcribed the 24
+golden-check clips (8 per language, each with its own language's checkpoint)
+with the old and the org copies, fp32 on CPU: 24/24 transcripts identical. A
+full golden check was not rerun, since only stage 2 changed.
