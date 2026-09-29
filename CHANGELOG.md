@@ -352,7 +352,10 @@ seconds in, one segment never produced a stop token and ran to the
 garbled audio. Its text fields all match DS6 exactly, and the evaluated DS7
 run synthesized the same answer normally, so this is run-to-run variation in
 Qwen3-TTS generation (no seed is set, in the source notebook or the port),
-not a frontend problem. Known issue, not fixed: a guard that treats a
+not a frontend problem. The evaluated DS7 run may have hit it too: 8 of its
+2,235 rows (6 eng, 2 ceb) have a round-trip WER above 2, meaning the
+transcribed audio had far more words than the text, which fits this failure
+but was not confirmed by listening. Known issue, not fixed: a guard that treats a
 segment reaching the cap as a TTS failure (text-only turn, the existing
 designed fallback) is a candidate follow-up, but it is a deviation from the
 source notebook and needs a GPU test.

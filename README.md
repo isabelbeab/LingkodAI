@@ -118,11 +118,11 @@ docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
 ```
 
 This build needs no GPU and only import-checks the pipeline (no CUDA touched,
-no weights loaded). It has not been run end to end in a container: JOJIE, the
-only machine with the model weights and the right GPU, is a shared
-JupyterHub and cannot run Docker. Real GPU runs happen there through the
-`lingkod-e2e` conda environment instead, built from this repo's
-`pyproject.toml`. Weights are not baked into the image (roughly 45 GB across
+no weights loaded). It has not been run end to end in a container: the GPU
+machines this project has used, JOJIE (a shared JupyterHub) and Colab,
+cannot run Docker. Real GPU runs happen outside Docker instead, through the
+`lingkod-e2e` conda environment on JOJIE or the Colab notebook, both
+installing from the same `pyproject.toml`. Weights are not baked into the image (roughly 45 GB across
 seven models) and download to `/data/hf` on first boot. The two one-time
 steps under Setting up the GPU pipeline below still apply inside the
 container: run them with their `--out` under the mounted `/data` volume so
@@ -132,7 +132,15 @@ commands.
 ## Environment
 
 Copy `.env.example` to `.env` and fill it in; `.env` is gitignored and must
-never be committed. See that file for what each variable is for.
+never be committed. See that file for what each variable is for. Nothing in
+the code reads `.env` by itself: load it into each new shell before running
+a script, with
+
+```bash
+set -a; source .env; set +a
+```
+
+(The Docker images take it with `--env-file .env` instead.)
 
 Four pip extras, defined in `pyproject.toml`:
 
@@ -177,7 +185,8 @@ Then two one-time steps, both needing `HF_TOKEN` in the environment (see
    not load as published under the pinned transformers 4.57.3 (see
    `CHANGELOG.md`, 2026-09-22). This script builds patched local copies
    (weights symlinked from the Hugging Face cache, not duplicated), verifies
-   them, and prints three `export ASR_...=` lines. Put those in `.env`.
+   them, and prints three `export ASR_...=` lines. Add them to `.env`
+   without the `export` (as `ASR_CEB=...` and so on), then reload `.env`.
 
    ```bash
    python scripts/patch_asr_tokenizers.py --out outputs/asr_patched
@@ -188,8 +197,8 @@ Then two one-time steps, both needing `HF_TOKEN` in the environment (see
    this public repo. They are in the private Hugging Face dataset repo
    `lingkodai/lingkodai-eval-assets`, readable by `lingkodai` org members.
    This script downloads them, checks every file against the repo's
-   `MANIFEST.sha256`, and prints the `TTS_REF_DIR` value for `.env` and the
-   exact golden-check command.
+   `MANIFEST.sha256`, and prints the `TTS_REF_DIR` value for `.env` (add it,
+   then reload `.env`) and the exact golden-check command.
 
    ```bash
    python scripts/fetch_eval_assets.py --out outputs/eval_assets
@@ -233,12 +242,20 @@ python scripts/golden_check.py \
     --out outputs/golden_check
 ```
 
+`final_lang` must match exactly. For transcript, English query, English
+answer and native answer, the script reports an exact-match rate and prints
+every diff -- it does not fail the run on a text mismatch, since greedy
+decoding can shift slightly across GPUs and library versions. A diff is
+meant to be read by a person. TTS audio is judged by listening, not compared
+by the script.
+
 It takes a while (every model loads once per language). On a shared machine,
 launch it with `nohup ... > golden.log 2>&1 &` after checking `nvidia-smi`,
 with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set.
 
 Without JOJIE, `notebooks/colab_golden_check.ipynb` runs the same golden
-check on a Colab GPU (L4 preferred, T4 works): it installs, runs both
+check on a Colab GPU (L4 preferred; a T4 is untested but has more memory
+than the 11 GB cards the pipeline runs on at JOJIE): it installs, runs both
 one-time steps, runs the check, saves the results to Google Drive and plays
 each turn's audio. It needs an `HF_TOKEN` Colab Secret with the same access
 as above.
@@ -251,13 +268,6 @@ to its `max_new_tokens` cap (4096 tokens, about 5.7 minutes of garbled
 audio). The turn's text answer is unaffected. It happened once in 24 turns
 on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
 2026-09-29.
-
-`final_lang` must match exactly. For transcript, English query, English
-answer and native answer, the script reports an exact-match rate and prints
-every diff -- it does not fail the run on a text mismatch, since greedy
-decoding can shift slightly across GPUs and library versions. A diff is
-meant to be read by a person. TTS audio is judged by listening, not compared
-by the script.
 
 ## Contributing
 
