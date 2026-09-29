@@ -43,9 +43,11 @@ Three artifacts, all built from this one repo:
    live, and serves pre-rendered audio from recorded end-to-end
    conversations. It runs locally (see below); it is not hosted anywhere.
 3. **The GPU image**: the full pipeline containerized. It is built and
-   import-checked locally, but verified for real only on JOJIE through the
-   `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
-   cannot run Docker.
+   import-checked locally, but not run end to end in a container. The
+   pipeline it packages is verified on a real GPU outside Docker instead: on
+   JOJIE through the `lingkod-e2e` conda environment (JOJIE is a shared
+   JupyterHub and cannot run Docker), and on Colab through
+   `notebooks/colab_golden_check.ipynb`.
 
 ## Execution modes
 
@@ -240,6 +242,15 @@ check on a Colab GPU (L4 preferred, T4 works): it installs, runs both
 one-time steps, runs the check, saves the results to Google Drive and plays
 each turn's audio. It needs an `HF_TOKEN` Colab Secret with the same access
 as above.
+[Open it in Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb).
+It was run end to end on 2026-09-29 on an NVIDIA L4; the result is in
+`CHANGELOG.md`.
+
+Known issue: Qwen3-TTS occasionally fails to stop on one segment and runs
+to its `max_new_tokens` cap (4096 tokens, about 5.7 minutes of garbled
+audio). The turn's text answer is unaffected. It happened once in 24 turns
+on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
+2026-09-29.
 
 `final_lang` must match exactly. For transcript, English query, English
 answer and native answer, the script reports an exact-match rate and prints

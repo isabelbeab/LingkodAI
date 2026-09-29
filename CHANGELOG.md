@@ -306,3 +306,53 @@ for the ASR checkpoints.
 `scripts/fetch_eval_assets.py` downloads it, verifies the manifest and prints
 `TTS_REF_DIR` and the golden-check command with its `--audio-root-map`.
 `src/tts.py` is unchanged: it still searches `TTS_REF_DIR` by filename.
+
+**Verified 2026-09-29:** uploaded from JOJIE by an org member, private,
+commit `e995094b`, 31 files (the 28 assets, the manifest, the dataset card
+and `.gitattributes`). `scripts/fetch_eval_assets.py` then downloaded it
+with a fine-grained read-only token and all 28 manifest entries matched, on
+JOJIE and again on Colab.
+
+---
+
+## 2026-09-29 -- Golden check on Colab
+
+**Issue:** The golden check had only ever run on JOJIE, which needs a JOJIE
+account and an assigned GPU. No one else could reproduce it.
+
+**Reason:** `notebooks/colab_golden_check.ipynb` runs it from a fresh clone
+on Colab, pulling the private assets from Hugging Face.
+
+**Decision:** Keep the notebook as the documented way to reproduce the
+golden check without JOJIE. Result of the first full run (NVIDIA L4 24 GB,
+Python 3.13.15, torch 2.11.0+cu128,
+transformers 4.57.3), compared with the 2026-09-23 JOJIE run:
+
+- `final_lang`: 3/3 match (ceb, fil, eng), as on JOJIE.
+- eng: 8/8 exact on every field, as on JOJIE.
+- ceb: transcript 4/8, English query 4/8, English answer 1/8, native answer
+  1/8, the same counts as JOJIE, including the two known follow-ups
+  (`ceb_01_mt_04` falls back to no-match; `ceb_01_mt_07` contradicts DS6 on
+  the processing time). The `ceb_01_mt_01` transcript diff is DS6's own
+  mojibake (`serviciÃ³n`), not a pipeline difference.
+- fil: transcript and English query 7/8, English and native answer 4/8
+  (JOJIE: 8/8 and 5/8). The one new diff is `fil_01_mt_05`: ASR on this GPU
+  heard `pamenta'y ang` where DS6 has `pamenta ang`, MT then rendered the
+  question as "What are the first two sentences?", and RAG answered with a
+  general description of the service instead of listing the first two
+  documents. The other fil answer diffs are wording drift.
+
+Greedy decoding shifting slightly across GPUs is expected (see README,
+Testing); the fil_01_mt_05 cascade is an example of how one token of ASR
+drift can change a later answer.
+
+TTS: 24/24 turns synthesized, but `ceb_01_mt_05` failed by ear: about 12
+seconds in, one segment never produced a stop token and ran to the
+`max_new_tokens=4096` cap (about 5.7 minutes at 12 tokens per second) of
+garbled audio. Its text fields all match DS6 exactly, and the evaluated DS7
+run synthesized the same answer normally, so this is run-to-run variation in
+Qwen3-TTS generation (no seed is set, in the source notebook or the port),
+not a frontend problem. Known issue, not fixed: a guard that treats a
+segment reaching the cap as a TTS failure (text-only turn, the existing
+designed fallback) is a candidate follow-up, but it is a deviation from the
+source notebook and needs a GPU test.
