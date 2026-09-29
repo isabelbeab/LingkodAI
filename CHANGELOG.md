@@ -19,6 +19,7 @@ drift apart on resampling or normalisation.
 **Decision:** Use the GitHub script and the `beabucayan/lingkodai-whisper-{ceb,fil,eng}`
 checkpoints, fp16 on CUDA. Keep `src/asr.py`'s vocab and embedding-size
 assertions.
+The repos moved to the `lingkodai` org on 2026-09-28; see that entry.
 
 ---
 
@@ -68,7 +69,7 @@ RAG author confirms which file produced DS6.
 
 ---
 
-## 2026-09-19 -- Hugging Face access
+## 2026-09-19 -- Hugging Face access (superseded)
 
 **Issue:** The ASR checkpoints are private, and the only access on hand was a
 teammate's shared account login.
@@ -79,6 +80,7 @@ shared account exposes the whole account if it leaks.
 **Decision:** Use a fine-grained read-only token scoped to the three ASR repos,
 set as `HF_TOKEN` in `.env`. Replace it with proper collaborator access and
 revoke it when the repo owner is back.
+Superseded 2026-09-28 by the move to the `lingkodai` org, below.
 
 ---
 
@@ -225,3 +227,40 @@ half-working public page is worse than none.
 **Decision:** Remove `fly.toml`, `app/gpu_backend_api.py`, the "Live pipeline"
 tab and `GPU_BACKEND_URL`. The CPU image is run locally with `docker run`.
 The Fly app itself is shut down separately.
+
+---
+
+## 2026-09-28 -- ASR checkpoints moved to the `lingkodai` Hugging Face org
+
+**Issue:** The three ASR checkpoints lived in the ASR author's personal
+Hugging Face account. The stakeholders created a `lingkodai` org and the ASR
+author uploaded every model there: `lingkodai/lingkodai-whisper-{ceb,fil,eng}`
+and `lingkodai/lingkodai-audio-lid-head`.
+
+**Reason:** The project's models should not depend on one person's account.
+Before switching, `scripts/compare_hf_repos.py` compared the Hub's file hashes
+without downloading weights. Every file in all three ASR org repos matches the
+personal repo, including `model.safetensors`, `tokenizer.json` and
+`tokenizer_config.json`. The org's `deeper_50chunks.pt` has the same SHA-256 as
+the committed `models/deeper_50chunks.pt`
+(`101c32f02a254a1596617d44a98c9eccbc0f761862232b787ddf31e2b066dc99`).
+Org commits checked: ceb `b90ec682`, fil `25722b97`, eng `9b9d4ffa`, LID head
+`0ac45810`.
+
+**Decision:** `src/asr.py`, `scripts/verify_shared_encoder.py` and
+`scripts/patch_asr_tokenizers.py` default to the `lingkodai/` repo IDs,
+approved by the ASR author. `HF_TOKEN` is now a fine-grained read-only token
+from an org member's own account, scoped to the three ASR org repos. The audio
+LID head is still loaded from the committed `models/deeper_50chunks.pt`, at the
+ASR author's call: the org copy is an archive, and `src/lid_audio.py` is
+unchanged. The tokenizer patch (2026-09-22 entry) still applies, since the org
+copies carry the same unpatched `tokenizer_config.json`.
+
+**Verified 2026-09-29 on JOJIE (CPU only, no GPU assigned):**
+`scripts/patch_asr_tokenizers.py --out outputs/asr_patched_org` downloaded and
+patched all three org repos (ceb 51,866 tokens with the custom token at 51865;
+fil and eng 51,865; 107 base special tokens match in each), at the same org
+commits listed above. `scripts/ab_asr_checkpoints.py` then transcribed the 24
+golden-check clips (8 per language, each with its own language's checkpoint)
+with the old and the org copies, fp32 on CPU: 24/24 transcripts identical. A
+full golden check was not rerun, since only stage 2 changed.

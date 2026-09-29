@@ -12,9 +12,9 @@ or if the custom token is not at the expected id.
 FIL and ENG use Whisper's native language tokens.
 
 Environment variables (all optional, defaults shown):
-    ASR_CEB   beabucayan/lingkodai-whisper-ceb
-    ASR_FIL   beabucayan/lingkodai-whisper-fil
-    ASR_ENG   beabucayan/lingkodai-whisper-eng
+    ASR_CEB   lingkodai/lingkodai-whisper-ceb
+    ASR_FIL   lingkodai/lingkodai-whisper-fil
+    ASR_ENG   lingkodai/lingkodai-whisper-eng
     HF_TOKEN  required while the model repos are private
 
 System dependency: ffmpeg.
@@ -35,9 +35,9 @@ CEB_TOKEN_ID = 51865
 MAX_LENGTH = 225
 
 CHECKPOINTS = {
-    "ceb": os.environ.get("ASR_CEB", "beabucayan/lingkodai-whisper-ceb"),
-    "fil": os.environ.get("ASR_FIL", "beabucayan/lingkodai-whisper-fil"),
-    "eng": os.environ.get("ASR_ENG", "beabucayan/lingkodai-whisper-eng"),
+    "ceb": os.environ.get("ASR_CEB", "lingkodai/lingkodai-whisper-ceb"),
+    "fil": os.environ.get("ASR_FIL", "lingkodai/lingkodai-whisper-fil"),
+    "eng": os.environ.get("ASR_ENG", "lingkodai/lingkodai-whisper-eng"),
 }
 
 # Whisper's own name for each language, for the two it already supports.
