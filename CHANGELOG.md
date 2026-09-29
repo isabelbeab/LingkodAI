@@ -40,7 +40,7 @@ Implemented in `src/mt.py`.
 
 ---
 
-## 2026-09-19 -- RAG compute dtype on JOJIE
+## 2026-09-19 -- RAG compute dtype on JOJIE (superseded)
 
 **Issue:** The RAG notebook sets `bnb_4bit_compute_dtype=torch.bfloat16`, but
 JOJIE's GPUs are Turing (compute capability 7.5) with no bf16 support.
@@ -49,6 +49,7 @@ JOJIE's GPUs are Turing (compute capability 7.5) with no bf16 support.
 
 **Decision:** Use `torch.float16` on JOJIE and record it in run output as a
 deviation from the evaluated Colab run. Restore bf16 on Ampere or newer.
+Never implemented; corrected 2026-09-29, below.
 
 ---
 
@@ -104,7 +105,7 @@ unnecessary complexity and would be easy to "tidy" wrongly.
 
 ---
 
-## 2026-09-21 -- TTS reference clips from local disk
+## 2026-09-21 -- TTS reference clips from local disk (superseded)
 
 **Issue:** The plan had the reference clips coming from a private HF repo
 (`TTS_REF_REPO`) that was never created.
@@ -116,6 +117,7 @@ uploading CC-BY-NC research audio to a personal account gains nothing.
 filename anywhere under `TTS_REF_DIR` and raises if one is missing or
 ambiguous. `ref_text` values are constants copied verbatim from the notebook,
 including the deliberate "siyete" substitution.
+Superseded 2026-09-29 by the private eval-assets dataset repo, below.
 
 ---
 
@@ -264,3 +266,96 @@ commits listed above. `scripts/ab_asr_checkpoints.py` then transcribed the 24
 golden-check clips (8 per language, each with its own language's checkpoint)
 with the old and the org copies, fp32 on CPU: 24/24 transcripts identical. A
 full golden check was not rerun, since only stage 2 changed.
+
+---
+
+## 2026-09-29 -- RAG compute dtype: correction
+
+**Issue:** The 2026-09-19 entry says RAG runs with
+`bnb_4bit_compute_dtype=torch.float16` on JOJIE. A fresh-clone audit found
+`src/rag.py` has used `torch.bfloat16`, the notebook's value, since it was
+written (commit `ee33b55`, 2026-09-21), and no run output records a dtype
+deviation.
+
+**Reason:** The golden-check runs on JOJIE (2026-09-22 and 2026-09-23) ran
+this code, so they used bf16 and completed. The record should say what
+actually ran.
+
+**Decision:** No code change. `src/rag.py` keeps bf16, matching the
+evaluated Colab run; the 2026-09-19 entry is marked superseded.
+
+---
+
+## 2026-09-29 -- Private eval assets on Hugging Face
+
+**Issue:** Reproducing the golden check needs files that cannot go in the
+GitHub repo, which is public: the three TTS reference clips (CC-BY-NC,
+research only), `DS6_augmented.xlsx`, and the golden conversation's 24
+source clips. They existed only on JOJIE, so no one else could run the
+golden check or TTS. The 2026-09-21 entry kept the clips on local disk.
+
+**Reason:** A private repo in the `lingkodai` org is not a personal account,
+and access goes through the same fine-grained read-only tokens already used
+for the ASR checkpoints.
+
+**Decision:** One private Hugging Face dataset repo,
+`lingkodai/lingkodai-eval-assets`: `tts_ref/` (the three clips, unpadded),
+`golden/DS6_augmented.xlsx`, `golden/audio/multi_turn/...` (conversation
+`CONV-MT-001` in all three languages, in the same layout as under the JOJIE
+`PRC_synthetic_qa` folder) and a `MANIFEST.sha256` of every file.
+`scripts/fetch_eval_assets.py` downloads it, verifies the manifest and prints
+`TTS_REF_DIR` and the golden-check command with its `--audio-root-map`.
+`src/tts.py` is unchanged: it still searches `TTS_REF_DIR` by filename.
+
+**Verified 2026-09-29:** uploaded from JOJIE by an org member, private,
+commit `e995094b`, 31 files (the 28 assets, the manifest, the dataset card
+and `.gitattributes`). `scripts/fetch_eval_assets.py` then downloaded it
+with a fine-grained read-only token and all 28 manifest entries matched, on
+JOJIE and again on Colab.
+
+---
+
+## 2026-09-29 -- Golden check on Colab
+
+**Issue:** The golden check had only ever run on JOJIE, which needs a JOJIE
+account and an assigned GPU. No one else could reproduce it.
+
+**Reason:** `notebooks/colab_golden_check.ipynb` runs it from a fresh clone
+on Colab, pulling the private assets from Hugging Face.
+
+**Decision:** Keep the notebook as the documented way to reproduce the
+golden check without JOJIE. Result of the first full run (NVIDIA L4 24 GB,
+Python 3.13.15, torch 2.11.0+cu128,
+transformers 4.57.3), compared with the 2026-09-23 JOJIE run:
+
+- `final_lang`: 3/3 match (ceb, fil, eng), as on JOJIE.
+- eng: 8/8 exact on every field, as on JOJIE.
+- ceb: transcript 4/8, English query 4/8, English answer 1/8, native answer
+  1/8, the same counts as JOJIE, including the two known follow-ups
+  (`ceb_01_mt_04` falls back to no-match; `ceb_01_mt_07` contradicts DS6 on
+  the processing time). The `ceb_01_mt_01` transcript diff is DS6's own
+  mojibake (`serviciÃ³n`), not a pipeline difference.
+- fil: transcript and English query 7/8, English and native answer 4/8
+  (JOJIE: 8/8 and 5/8). The one new diff is `fil_01_mt_05`: ASR on this GPU
+  heard `pamenta'y ang` where DS6 has `pamenta ang`, MT then rendered the
+  question as "What are the first two sentences?", and RAG answered with a
+  general description of the service instead of listing the first two
+  documents. The other fil answer diffs are wording drift.
+
+Greedy decoding shifting slightly across GPUs is expected (see README,
+Testing); the fil_01_mt_05 cascade is an example of how one token of ASR
+drift can change a later answer.
+
+TTS: 24/24 turns synthesized, but `ceb_01_mt_05` failed by ear: about 12
+seconds in, one segment never produced a stop token and ran to the
+`max_new_tokens=4096` cap (about 5.7 minutes at 12 tokens per second) of
+garbled audio. Its text fields all match DS6 exactly, and the evaluated DS7
+run synthesized the same answer normally, so this is run-to-run variation in
+Qwen3-TTS generation (no seed is set, in the source notebook or the port),
+not a frontend problem. The evaluated DS7 run may have hit it too: 8 of its
+2,235 rows (6 eng, 2 ceb) have a round-trip WER above 2, meaning the
+transcribed audio had far more words than the text, which fits this failure
+but was not confirmed by listening. Known issue, not fixed: a guard that treats a
+segment reaching the cap as a TTS failure (text-only turn, the existing
+designed fallback) is a candidate follow-up, but it is a deviation from the
+source notebook and needs a GPU test.

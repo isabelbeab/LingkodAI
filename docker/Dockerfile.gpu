@@ -7,11 +7,23 @@
 #
 # Build (from the repo root; building needs no GPU):
 #   docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
-# Run (needs NVIDIA driver + nvidia-container-toolkit on the host):
-#   docker run --rm --gpus all -e HF_TOKEN=... -v lingkodai-hf:/data/hf lingkodai-gpu
+# Run (needs NVIDIA driver + nvidia-container-toolkit on the host). HF_TOKEN
+# comes from .env, never typed on the command line:
+#   docker run --rm --gpus all --env-file .env -v lingkodai-hf:/data/hf lingkodai-gpu
 #
 # Weights are NOT baked in: roughly 45 GB across the seven models. They download
 # to /data/hf on first boot. Mount a volume there or every restart re-downloads.
+#
+# Two one-time steps before the first real run, the same as outside a
+# container (README, "Setting up the GPU pipeline"). Their output goes under
+# the mounted volume so it persists:
+#   docker run --rm --env-file .env -v lingkodai-hf:/data/hf lingkodai-gpu \
+#       python scripts/patch_asr_tokenizers.py --out /data/hf/asr_patched
+#   docker run --rm --env-file .env -v lingkodai-hf:/data/hf lingkodai-gpu \
+#       python scripts/fetch_eval_assets.py --out /data/hf/eval_assets
+# Then add ASR_CEB/FIL/ENG and TTS_REF_DIR, as printed (paths under /data/hf),
+# to .env. The patched ASR copies symlink into the HF cache on the same
+# volume, so they only resolve with that volume mounted.
 
 FROM python:3.12-slim
 

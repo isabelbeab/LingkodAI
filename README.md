@@ -43,9 +43,11 @@ Three artifacts, all built from this one repo:
    live, and serves pre-rendered audio from recorded end-to-end
    conversations. It runs locally (see below); it is not hosted anywhere.
 3. **The GPU image**: the full pipeline containerized. It is built and
-   import-checked locally, but verified for real only on JOJIE through the
-   `lingkod-e2e` conda environment, because JOJIE is a shared JupyterHub and
-   cannot run Docker.
+   import-checked locally, but not run end to end in a container. The
+   pipeline it packages is verified on a real GPU outside Docker instead: on
+   JOJIE through the `lingkod-e2e` conda environment (JOJIE is a shared
+   JupyterHub and cannot run Docker), and on Colab through
+   `notebooks/colab_golden_check.ipynb`.
 
 ## Execution modes
 
@@ -116,17 +118,29 @@ docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
 ```
 
 This build needs no GPU and only import-checks the pipeline (no CUDA touched,
-no weights loaded). It has not been run end to end in a container: JOJIE, the
-only machine with the model weights and the right GPU, is a shared
-JupyterHub and cannot run Docker. Real GPU runs happen there through the
-`lingkod-e2e` conda environment instead, built from this repo's
-`pyproject.toml`. Weights are not baked into the image (roughly 45 GB across
-seven models) and download to `/data/hf` on first boot.
+no weights loaded). It has not been run end to end in a container: the GPU
+machines this project has used, JOJIE (a shared JupyterHub) and Colab,
+cannot run Docker. Real GPU runs happen outside Docker instead, through the
+`lingkod-e2e` conda environment on JOJIE or the Colab notebook, both
+installing from the same `pyproject.toml`. Weights are not baked into the image (roughly 45 GB across
+seven models) and download to `/data/hf` on first boot. The two one-time
+steps under Setting up the GPU pipeline below still apply inside the
+container: run them with their `--out` under the mounted `/data` volume so
+they persist across runs. `docker/Dockerfile.gpu`'s header shows the
+commands.
 
 ## Environment
 
 Copy `.env.example` to `.env` and fill it in; `.env` is gitignored and must
-never be committed. See that file for what each variable is for.
+never be committed. See that file for what each variable is for. Nothing in
+the code reads `.env` by itself: load it into each new shell before running
+a script, with
+
+```bash
+set -a; source .env; set +a
+```
+
+(The Docker images take it with `--env-file .env` instead.)
 
 Four pip extras, defined in `pyproject.toml`:
 
@@ -139,8 +153,63 @@ Four pip extras, defined in `pyproject.toml`:
 - `eval`: scoring libraries for the golden check.
 - `dev`: pytest.
 
-On JOJIE: one conda env, `lingkod-e2e`, Python 3.12, built from this repo's
-`pyproject.toml`. Never install into any other `lingkod-*` env.
+System packages: the full pipeline also needs `ffmpeg` on `PATH`
+(`src/audio.py` shells out to it to resample every input to 16 kHz mono) and
+`sox` (`qwen_tts` warns on import without it). On Debian or Ubuntu:
+`sudo apt install ffmpeg sox`. `docker/Dockerfile.gpu` installs both.
+
+### Setting up the GPU pipeline
+
+On JOJIE the environment is one conda env, `lingkod-e2e`, Python 3.12, built
+from this repo's `pyproject.toml`. Never install into any other `lingkod-*`
+env. From the repo root:
+
+```bash
+conda create -n lingkod-e2e python=3.12 -y
+conda activate lingkod-e2e
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+pip install -e ".[gpu,eval]"
+python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list())"
+```
+
+The last line must list the card's architecture (`sm_61` for a GTX 1080 Ti,
+`sm_75` for an RTX 2080 Ti). The verified JOJIE runs used torch
+2.14.0+cu126 with transformers 4.57.3. On a new terminal, run
+`conda activate lingkod-e2e` again and check the prompt shows it before
+launching anything.
+
+Then two one-time steps, both needing `HF_TOKEN` in the environment (see
+`.env.example` for what the token must be able to read):
+
+1. **Patch the ASR tokenizers.** The three fine-tuned Whisper checkpoints do
+   not load as published under the pinned transformers 4.57.3 (see
+   `CHANGELOG.md`, 2026-09-22). This script builds patched local copies
+   (weights symlinked from the Hugging Face cache, not duplicated), verifies
+   them, and prints three `export ASR_...=` lines. Add them to `.env`
+   without the `export` (as `ASR_CEB=...` and so on), then reload `.env`.
+
+   ```bash
+   python scripts/patch_asr_tokenizers.py --out outputs/asr_patched
+   ```
+
+2. **Fetch the private eval assets.** The TTS reference clips, the DS6
+   reference run and the golden conversation's source audio cannot live in
+   this public repo. They are in the private Hugging Face dataset repo
+   `lingkodai/lingkodai-eval-assets`, readable by `lingkodai` org members.
+   This script downloads them, checks every file against the repo's
+   `MANIFEST.sha256`, and prints the `TTS_REF_DIR` value for `.env` (add it,
+   then reload `.env`) and the exact golden-check command.
+
+   ```bash
+   python scripts/fetch_eval_assets.py --out outputs/eval_assets
+   ```
+
+The TTS reference clips are Philippine Languages Database speaker audio
+under a CC-BY-NC, research-only licence. Do not redistribute them.
+
+The models themselves (roughly 45 GB across seven) download from the Hugging
+Face Hub on first use. Apart from the three ASR checkpoints, all are public
+and ungated.
 
 ## Testing
 
@@ -160,10 +229,17 @@ regenerated set cannot silently change synthesis without a test noticing.
 The acceptance test is the golden check: three real conversations (one per
 language, same source audio) run through the full pipeline on a GPU and
 compared against `DS6_augmented.xlsx`, the evaluated Scenario 2 reference
-run.
+run. It needs the GPU setup above, including both one-time steps. The audio
+paths recorded in DS6 are absolute JOJIE paths, so `--audio-root-map`
+remaps them onto the downloaded copy; `scripts/fetch_eval_assets.py` prints
+the full command with the right paths filled in:
 
 ```bash
-python scripts/golden_check.py --ds6 path/to/DS6_augmented.xlsx --out outputs/golden_check
+python scripts/golden_check.py \
+    --ds6 outputs/eval_assets/golden/DS6_augmented.xlsx \
+    --conversation-id CONV-MT-001 \
+    --audio-root-map /home2/msds2026/ibucayan/Capstone/PRC_synthetic_qa=$PWD/outputs/eval_assets/golden/audio \
+    --out outputs/golden_check
 ```
 
 `final_lang` must match exactly. For transcript, English query, English
@@ -172,6 +248,26 @@ every diff -- it does not fail the run on a text mismatch, since greedy
 decoding can shift slightly across GPUs and library versions. A diff is
 meant to be read by a person. TTS audio is judged by listening, not compared
 by the script.
+
+It takes a while (every model loads once per language). On a shared machine,
+launch it with `nohup ... > golden.log 2>&1 &` after checking `nvidia-smi`,
+with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set.
+
+Without JOJIE, `notebooks/colab_golden_check.ipynb` runs the same golden
+check on a Colab GPU (L4 preferred; a T4 is untested but has more memory
+than the 11 GB cards the pipeline runs on at JOJIE): it installs, runs both
+one-time steps, runs the check, saves the results to Google Drive and plays
+each turn's audio. It needs an `HF_TOKEN` Colab Secret with the same access
+as above.
+[Open it in Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb).
+It was run end to end on 2026-09-29 on an NVIDIA L4; the result is in
+`CHANGELOG.md`.
+
+Known issue: Qwen3-TTS occasionally fails to stop on one segment and runs
+to its `max_new_tokens` cap (4096 tokens, about 5.7 minutes of garbled
+audio). The turn's text answer is unaffected. It happened once in 24 turns
+on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
+2026-09-29.
 
 ## Contributing
 
@@ -183,8 +279,8 @@ by the script.
 - New stage modules are ports, not redesigns: same models, prompts,
   constants, decoding settings, thresholds and fallback messages as their
   source notebook. Prompts must be byte-identical to the source.
-- Work happens on branch `e2e-integration`; PRs to `main` only, never a
-  direct push. One stage per commit; commit messages start with the stage
+- Work happens on a feature branch; PRs to `main` only, never a direct
+  push. One stage per commit; commit messages start with the stage
   number.
 - No silent fallbacks: a missing file, token, or unexpected shape raises
   with a clear message rather than guessing. The only designed fallbacks
