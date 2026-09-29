@@ -40,7 +40,7 @@ Implemented in `src/mt.py`.
 
 ---
 
-## 2026-09-19 -- RAG compute dtype on JOJIE
+## 2026-09-19 -- RAG compute dtype on JOJIE (superseded)
 
 **Issue:** The RAG notebook sets `bnb_4bit_compute_dtype=torch.bfloat16`, but
 JOJIE's GPUs are Turing (compute capability 7.5) with no bf16 support.
@@ -49,6 +49,7 @@ JOJIE's GPUs are Turing (compute capability 7.5) with no bf16 support.
 
 **Decision:** Use `torch.float16` on JOJIE and record it in run output as a
 deviation from the evaluated Colab run. Restore bf16 on Ampere or newer.
+Never implemented; corrected 2026-09-29, below.
 
 ---
 
@@ -104,7 +105,7 @@ unnecessary complexity and would be easy to "tidy" wrongly.
 
 ---
 
-## 2026-09-21 -- TTS reference clips from local disk
+## 2026-09-21 -- TTS reference clips from local disk (superseded)
 
 **Issue:** The plan had the reference clips coming from a private HF repo
 (`TTS_REF_REPO`) that was never created.
@@ -116,6 +117,7 @@ uploading CC-BY-NC research audio to a personal account gains nothing.
 filename anywhere under `TTS_REF_DIR` and raises if one is missing or
 ambiguous. `ref_text` values are constants copied verbatim from the notebook,
 including the deliberate "siyete" substitution.
+Superseded 2026-09-29 by the private eval-assets dataset repo, below.
 
 ---
 
@@ -264,3 +266,43 @@ commits listed above. `scripts/ab_asr_checkpoints.py` then transcribed the 24
 golden-check clips (8 per language, each with its own language's checkpoint)
 with the old and the org copies, fp32 on CPU: 24/24 transcripts identical. A
 full golden check was not rerun, since only stage 2 changed.
+
+---
+
+## 2026-09-29 -- RAG compute dtype: correction
+
+**Issue:** The 2026-09-19 entry says RAG runs with
+`bnb_4bit_compute_dtype=torch.float16` on JOJIE. A fresh-clone audit found
+`src/rag.py` has used `torch.bfloat16`, the notebook's value, since it was
+written (commit `ee33b55`, 2026-09-21), and no run output records a dtype
+deviation.
+
+**Reason:** The golden-check runs on JOJIE (2026-09-22 and 2026-09-23) ran
+this code, so they used bf16 and completed. The record should say what
+actually ran.
+
+**Decision:** No code change. `src/rag.py` keeps bf16, matching the
+evaluated Colab run; the 2026-09-19 entry is marked superseded.
+
+---
+
+## 2026-09-29 -- Private eval assets on Hugging Face
+
+**Issue:** Reproducing the golden check needs files that cannot go in the
+GitHub repo, which is public: the three TTS reference clips (CC-BY-NC,
+research only), `DS6_augmented.xlsx`, and the golden conversation's 24
+source clips. They existed only on JOJIE, so no one else could run the
+golden check or TTS. The 2026-09-21 entry kept the clips on local disk.
+
+**Reason:** A private repo in the `lingkodai` org is not a personal account,
+and access goes through the same fine-grained read-only tokens already used
+for the ASR checkpoints.
+
+**Decision:** One private Hugging Face dataset repo,
+`lingkodai/lingkodai-eval-assets`: `tts_ref/` (the three clips, unpadded),
+`golden/DS6_augmented.xlsx`, `golden/audio/multi_turn/...` (conversation
+`CONV-MT-001` in all three languages, in the same layout as under the JOJIE
+`PRC_synthetic_qa` folder) and a `MANIFEST.sha256` of every file.
+`scripts/fetch_eval_assets.py` downloads it, verifies the manifest and prints
+`TTS_REF_DIR` and the golden-check command with its `--audio-root-map`.
+`src/tts.py` is unchanged: it still searches `TTS_REF_DIR` by filename.
