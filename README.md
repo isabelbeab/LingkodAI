@@ -235,6 +235,12 @@ It takes a while (every model loads once per language). On a shared machine,
 launch it with `nohup ... > golden.log 2>&1 &` after checking `nvidia-smi`,
 with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set.
 
+Without JOJIE, `notebooks/colab_golden_check.ipynb` runs the same golden
+check on a Colab GPU (L4 preferred, T4 works): it installs, runs both
+one-time steps, runs the check, saves the results to Google Drive and plays
+each turn's audio. It needs an `HF_TOKEN` Colab Secret with the same access
+as above.
+
 `final_lang` must match exactly. For transcript, English query, English
 answer and native answer, the script reports an exact-match rate and prints
 every diff -- it does not fail the run on a text mismatch, since greedy
