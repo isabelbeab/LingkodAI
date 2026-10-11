@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LingkodAI <noreply@lingkodai.invalid>
+Date: Sun, 11 Oct 2026 13:05:04 +0800
+Subject: [PATCH 2/2] Talker KV length configurable, refuse requests that
+ cannot fit
+
+The talker KV cache was hardcoded to 4096 positions. LingkodAI runs
+max_new_tokens=4096 on top of an ICL prefix of a few hundred positions,
+which overflows mid generation.
+
+Adds qt_init_params.talker_ctx (ABI 7, tail field, gated on
+abi_version, 0 or unset selects 4096) and --talker-ctx on qwen-tts and
+tts-server. tts_engine_admit now refuses a request whose prompt T_ctx
+plus max_new_tokens exceeds the KV length with QT_STATUS_INVALID_PARAMS
+before any compute, instead of failing partway through generation.
+---
+ src/pipeline-tts.cpp | 23 ++++++++++++++++++-----
+ src/pipeline-tts.h   |  6 ++++--
+ src/qwen.cpp         | 10 +++++++++-
+ src/qwen.h           | 12 ++++++++++--
+ tools/qwen-tts.cpp   |  6 ++++++
+ tools/tts-server.cpp |  9 ++++++++-
+ 6 files changed, 55 insertions(+), 11 deletions(-)
+
+diff --git a/src/pipeline-tts.cpp b/src/pipeline-tts.cpp
+index 1dfc619..99fec82 100644
+--- a/src/pipeline-tts.cpp
++++ b/src/pipeline-tts.cpp
+@@ -144,7 +144,8 @@ bool pipeline_tts_load(PipelineTTS * pt,
+                        bool          clamp_fp16,
+                        int           max_batch,
+                        float         codec_chunk_sec,
+-                       bool          icl_non_streaming) {
++                       bool          icl_non_streaming,
++                       int           talker_ctx) {
+     pt->bp                  = bp;
+     pt->backend             = bp.backend;
+     pt->sched               = NULL;
+@@ -253,11 +254,11 @@ bool pipeline_tts_load(PipelineTTS * pt,
+     }
+ 
+     // KV caches, one set per slot: the talker holds the LM context up
+-    // to 4096 positions (the longest ICL prompt observed is ~250 +
+-    // max_new_tokens ~ 1500, so 4096 has 60% headroom). Predictor holds
+-    // one frame of 16 sub-steps per slot.
++    // to talker_ctx positions (prompt prefix plus every generated frame,
++    // checked per request at admit). Predictor holds one frame of 16
++    // sub-steps per slot.
+     if (!kv_cache_init(&pt->talker_kv, pt->talker.num_hidden_layers, pt->talker.num_key_value_heads,
+-                       pt->talker.head_dim, 4096, pt->max_batch, pt->backend)) {
++                       pt->talker.head_dim, talker_ctx, pt->max_batch, pt->backend)) {
+         ggml_backend_sched_free(pt->sched);
+         pt->sched = NULL;
+         pipeline_codec_free(&pt->codec);
+@@ -881,6 +882,18 @@ bool tts_engine_admit(TtsEngine * e, TtsJob * job) {
+     }
+     s.perf.build_ms = t_build.ms();
+ 
++    // The talker KV never grows: a request whose prefix plus
++    // max_new_tokens cannot fit is refused here, before any compute,
++    // instead of failing mid generation when the cache runs out.
++    if (s.prompt.T_ctx + params->max_new_tokens > pt->talker_kv.max_seq_len) {
++        qt_set_error("tts_engine_admit: prompt T_ctx %d plus max_new_tokens %d exceeds the talker KV length %d",
++                     s.prompt.T_ctx, params->max_new_tokens, pt->talker_kv.max_seq_len);
++        qt_log(QT_LOG_ERROR, "[Pipeline] prompt T_ctx %d plus max_new_tokens %d exceeds the talker KV length %d",
++               s.prompt.T_ctx, params->max_new_tokens, pt->talker_kv.max_seq_len);
++        e->slots.pop_back();
++        return tts_admit_fail(job, QT_STATUS_INVALID_PARAMS);
++    }
++
+     if (params->dump_dir) {
+         DebugDumper d;
+         debug_init(&d, params->dump_dir);
+diff --git a/src/pipeline-tts.h b/src/pipeline-tts.h
+index 9facf7b..b9f18c5 100644
+--- a/src/pipeline-tts.h
++++ b/src/pipeline-tts.h
+@@ -196,7 +196,8 @@ struct PipelineTTS {
+ // converts to the chunk width every buffered decode on this handle
+ // runs with; the left context that pairs with it derives from the
+ // codec's own sliding window. icl_non_streaming selects the ICL
+-// prompt layout (see PipelineTTS). Caller frees with pipeline_tts_free.
++// prompt layout (see PipelineTTS). talker_ctx sizes the talker KV
++// cache in positions. Caller frees with pipeline_tts_free.
+ bool pipeline_tts_load(PipelineTTS * pt,
+                        const char *  talker_gguf_path,
+                        const char *  codec_gguf_path,
+@@ -205,7 +206,8 @@ bool pipeline_tts_load(PipelineTTS * pt,
+                        bool          clamp_fp16,
+                        int           max_batch,
+                        float         codec_chunk_sec,
+-                       bool          icl_non_streaming);
++                       bool          icl_non_streaming,
++                       int           talker_ctx);
+ 
+ void pipeline_tts_free(PipelineTTS * pt);
+ 
+diff --git a/src/qwen.cpp b/src/qwen.cpp
+index 7f82f14..359ca5b 100644
+--- a/src/qwen.cpp
++++ b/src/qwen.cpp
+@@ -228,6 +228,9 @@ void qt_log_set(qt_log_cb cb, void * user_data) {
+ // qt_init resolution of an unset value.
+ static const float QT_CODEC_CHUNK_SEC_DEFAULT = 24.0f;
+ 
++// Talker KV length default, shared the same way.
++static const int QT_TALKER_CTX_DEFAULT = 4096;
++
+ void qt_init_default_params(struct qt_init_params * p) {
+     p->abi_version = QT_ABI_VERSION;
+     p->talker_path = nullptr;
+@@ -239,6 +242,7 @@ void qt_init_default_params(struct qt_init_params * p) {
+     p->codec_chunk_sec = QT_CODEC_CHUNK_SEC_DEFAULT;
+ 
+     p->icl_non_streaming = false;
++    p->talker_ctx        = QT_TALKER_CTX_DEFAULT;
+ }
+ 
+ void qt_tts_default_params(struct qt_tts_params * p) {
+@@ -453,6 +457,10 @@ struct qt_context * qt_init(const struct qt_init_params * params) {
+     const bool icl_non_streaming = params->abi_version >= 6 ? params->icl_non_streaming : false;
+     qt_log(QT_LOG_INFO, "[Qwen] ICL prompt layout: non_streaming_mode=%s", icl_non_streaming ? "True" : "False");
+ 
++    const int talker_ctx =
++        (params->abi_version >= 7 && params->talker_ctx > 0) ? params->talker_ctx : QT_TALKER_CTX_DEFAULT;
++    qt_log(QT_LOG_INFO, "[Qwen] Talker KV length: %d positions", talker_ctx);
++
+     // new qt_context() value-initialises every field: POD aggregates
+     // (BackendPair, PipelineTTS) are zero-init, std containers in
+     // BPETokenizer construct empty.
+@@ -470,7 +478,7 @@ struct qt_context * qt_init(const struct qt_init_params * params) {
+         }
+ 
+         if (!pipeline_tts_load(&q->pt, params->talker_path, params->codec_path, q->bp, params->use_fa,
+-                               params->clamp_fp16, max_batch, chunk_sec, icl_non_streaming)) {
++                               params->clamp_fp16, max_batch, chunk_sec, icl_non_streaming, talker_ctx)) {
+             qt_throw("qt_init: pipeline_tts_load failed for '%s' / '%s'", params->talker_path, params->codec_path);
+         }
+ 
+diff --git a/src/qwen.h b/src/qwen.h
+index ed57fa8..46d0093 100644
+--- a/src/qwen.h
++++ b/src/qwen.h
+@@ -59,7 +59,7 @@ extern "C" {
+ // git short hash + commit date string returned by qt_version(); for
+ // binding compat checks, QT_ABI_VERSION is the only number that
+ // matters.
+-#define QT_ABI_VERSION 6
++#define QT_ABI_VERSION 7
+ 
+ // Oldest struct layout this build addresses. A v4 or older
+ // qt_tts_params places its trailing fields at offsets this build does
+@@ -166,11 +166,19 @@ struct qt_init_params {
+     // [codec_bos ; ref_codes] over tts_pad, trailing text = tts_pad.
+     // Only the ICL clone path reads it.
+     bool icl_non_streaming;
++
++    // Talker KV cache length in positions (abi_version >= 7), allocated
++    // once per batch slot at init (f32 K and V for every layer). A
++    // request is admitted only when its prompt prefix plus its
++    // max_new_tokens fit, otherwise it fails with
++    // QT_STATUS_INVALID_PARAMS before any compute. 0 selects 4096.
++    int talker_ctx;
+ };
+ 
+ // Initialise to the standard defaults: both paths NULL (caller must set
+ // them before calling qt_init), use_fa true, clamp_fp16 false,
+-// max_batch 1, codec_chunk_sec 24.0, icl_non_streaming false.
++// max_batch 1, codec_chunk_sec 24.0, icl_non_streaming false,
++// talker_ctx 4096.
+ QT_API void qt_init_default_params(struct qt_init_params * p);
+ 
+ // Allocate every module described by params. Returns NULL on any
+diff --git a/tools/qwen-tts.cpp b/tools/qwen-tts.cpp
+index fa6054a..c1980b6 100644
+--- a/tools/qwen-tts.cpp
++++ b/tools/qwen-tts.cpp
+@@ -55,6 +55,7 @@ static void print_usage(const char * prog) {
+             "  --ref-text <path>       Transcript file for the reference (enables ICL clone mode)\n"
+             "  --max-new <n>           Max new audio frames (default: %d)\n"
+             "  --codec-chunk-dur <f>   Codec decode chunk duration in seconds (default: 24.0)\n"
++            "  --talker-ctx <n>        Talker KV length, prompt prefix plus --max-new (default: 4096)\n"
+             "  --stream-by-line        Flush synthesis at each newline, one WAV header per line (-o '-')\n\n"
+             "Sampling:\n"
+             "  --seed <int>            Sampling seed (default: -1 for random)\n"
+@@ -93,6 +94,7 @@ struct Args {
+     bool         stream_by_line;
+     float        codec_chunk_sec;
+     bool         icl_non_streaming;
++    int          talker_ctx;
+ 
+     // Synthesis params seeded by qt_tts_default_params; sampling flags
+     // write straight into it, so only what the user sets deviates.
+@@ -182,6 +184,7 @@ static bool parse_args(int argc, char ** argv, Args & a) {
+     a.clamp_fp16        = false;
+     a.stream_by_line    = false;
+     a.icl_non_streaming = false;
++    a.talker_ctx        = 0;
+     // Chunk sentinel : qt_init resolves a non positive value to the
+     // library default.
+     a.codec_chunk_sec   = 0.0f;
+@@ -245,6 +248,8 @@ static bool parse_args(int argc, char ** argv, Args & a) {
+             a.icl_non_streaming = true;
+         } else if (std::strcmp(arg, "--codec-chunk-dur") == 0 && i + 1 < argc) {
+             a.codec_chunk_sec = (float) std::atof(argv[++i]);
++        } else if (std::strcmp(arg, "--talker-ctx") == 0 && i + 1 < argc) {
++            a.talker_ctx = std::atoi(argv[++i]);
+         } else if (std::strcmp(arg, "-o") == 0 && i + 1 < argc) {
+             a.out_wav = argv[++i];
+         } else {
+@@ -267,6 +272,7 @@ static int run(const Args & a) {
+     iparams.clamp_fp16        = a.clamp_fp16;
+     iparams.codec_chunk_sec   = a.codec_chunk_sec;
+     iparams.icl_non_streaming = a.icl_non_streaming;
++    iparams.talker_ctx        = a.talker_ctx;
+ 
+     qt_context * q = qt_init(&iparams);
+     if (!q) {
+diff --git a/tools/tts-server.cpp b/tools/tts-server.cpp
+index 327fbac..1f15761 100644
+--- a/tools/tts-server.cpp
++++ b/tools/tts-server.cpp
+@@ -54,7 +54,8 @@ static void print_usage(const char * prog) {
+             "  --no-fa                 Disable flash attention\n"
+             "  --clamp-fp16            Clamp hidden states to FP16 range\n"
+             "  --icl-non-streaming     ICL clone prompt in the upstream non_streaming_mode=True layout\n"
+-            "  --codec-chunk-dur <f>   Codec decode chunk duration in seconds, wav responses (default: 24.0)\n",
++            "  --codec-chunk-dur <f>   Codec decode chunk duration in seconds, wav responses (default: 24.0)\n"
++            "  --talker-ctx <n>        Talker KV length, prompt prefix plus max_new_tokens (default: 4096)\n",
+             prog);
+ }
+ 
+@@ -75,6 +76,9 @@ int main(int argc, char ** argv) {
+     bool          clamp_fp16        = false;
+     int           max_batch         = 1;
+     bool          icl_non_streaming = false;
++    // KV sentinel : qt_init resolves a non positive value to the
++    // library default.
++    int           talker_ctx        = 0;
+     // Chunk sentinel : qt_init resolves a non positive value to the
+     // library default.
+     float         codec_chunk_dur   = 0.0f;
+@@ -103,6 +107,8 @@ int main(int argc, char ** argv) {
+             max_batch = std::atoi(argv[++i]);
+         } else if (!std::strcmp(arg, "--codec-chunk-dur") && i + 1 < argc) {
+             codec_chunk_dur = (float) std::atof(argv[++i]);
++        } else if (!std::strcmp(arg, "--talker-ctx") && i + 1 < argc) {
++            talker_ctx = std::atoi(argv[++i]);
+         } else {
+             print_usage(argv[0]);
+             return 1;
+@@ -123,6 +129,7 @@ int main(int argc, char ** argv) {
+     iparams.max_batch         = max_batch;
+     iparams.codec_chunk_sec   = codec_chunk_dur;
+     iparams.icl_non_streaming = icl_non_streaming;
++    iparams.talker_ctx        = talker_ctx;
+ 
+     struct qt_context * q = qt_init(&iparams);
+     if (!q) {

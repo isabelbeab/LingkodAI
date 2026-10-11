@@ -1,0 +1,462 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LingkodAI <noreply@lingkodai.invalid>
+Date: Sun, 11 Oct 2026 13:05:04 +0800
+Subject: [PATCH 1/2] ICL clone: optional non_streaming_mode=True prompt layout
+
+Upstream qwen-tts generate_icl_prompt has two branches. qwentts.cpp
+ports non_streaming_mode=False (text and codec streams aligned to the
+codec length and summed). LingkodAI's evaluated Stage 7 calls
+generate_voice_clone with non_streaming_mode=True, which concatenates
+the streams instead: [ref_text ; text ; tts_eos] over codec_pad, then
+[codec_bos ; ref_codes] over tts_pad, trailing text = tts_pad.
+
+Adds qt_init_params.icl_non_streaming (ABI 6, tail field, gated on
+abi_version, default false so upstream behaviour is unchanged), the
+--icl-non-streaming flag on qwen-tts and tts-server, and --non-streaming
+on tests/debug-clone-cossim.py to validate the layout against Python.
+---
+ src/pipeline-tts.cpp        |  5 +-
+ src/pipeline-tts.h          | 11 ++++-
+ src/prompt-builder.h        | 94 +++++++++++++++++++++++--------------
+ src/qwen.cpp                |  8 +++-
+ src/qwen.h                  | 13 ++++-
+ tests/debug-clone-cossim.py | 11 ++++-
+ tools/qwen-tts.cpp          | 30 +++++++-----
+ tools/tts-server.cpp        | 25 ++++++----
+ 8 files changed, 133 insertions(+), 64 deletions(-)
+
+diff --git a/src/pipeline-tts.cpp b/src/pipeline-tts.cpp
+index 7e64d76..1dfc619 100644
+--- a/src/pipeline-tts.cpp
++++ b/src/pipeline-tts.cpp
+@@ -143,7 +143,8 @@ bool pipeline_tts_load(PipelineTTS * pt,
+                        bool          use_fa,
+                        bool          clamp_fp16,
+                        int           max_batch,
+-                       float         codec_chunk_sec) {
++                       float         codec_chunk_sec,
++                       bool          icl_non_streaming) {
+     pt->bp                  = bp;
+     pt->backend             = bp.backend;
+     pt->sched               = NULL;
+@@ -164,6 +165,8 @@ bool pipeline_tts_load(PipelineTTS * pt,
+     pt->use_flash_attn = use_fa && bp.has_gpu;
+     pt->clamp_fp16     = clamp_fp16;
+ 
++    pt->icl_non_streaming = icl_non_streaming;
++
+     if (!gf_load(&pt->gguf_talker, talker_gguf_path)) {
+         qt_log(QT_LOG_ERROR, "[Pipeline] failed to load talker GGUF: %s", talker_gguf_path);
+         return false;
+diff --git a/src/pipeline-tts.h b/src/pipeline-tts.h
+index b8ee5d9..9facf7b 100644
+--- a/src/pipeline-tts.h
++++ b/src/pipeline-tts.h
+@@ -155,6 +155,11 @@ struct PipelineTTS {
+     bool use_flash_attn;
+     bool clamp_fp16;
+ 
++    // ICL clone prompt layout, set at load: true mirrors upstream
++    // generate_icl_prompt with non_streaming_mode=True, false the
++    // non_streaming_mode=False branch. Read by prompt_builder_build.
++    bool icl_non_streaming;
++
+     // Persistent KV caches, one set per slot: the talker holds the LM
+     // contexts, the predictor holds one frame's 16 sub-steps per slot,
+     // rewritten every frame at baked rows.
+@@ -190,7 +195,8 @@ struct PipelineTTS {
+ // and the maximum concurrent slots (minimum 1). codec_chunk_sec
+ // converts to the chunk width every buffered decode on this handle
+ // runs with; the left context that pairs with it derives from the
+-// codec's own sliding window. Caller frees with pipeline_tts_free.
++// codec's own sliding window. icl_non_streaming selects the ICL
++// prompt layout (see PipelineTTS). Caller frees with pipeline_tts_free.
+ bool pipeline_tts_load(PipelineTTS * pt,
+                        const char *  talker_gguf_path,
+                        const char *  codec_gguf_path,
+@@ -198,7 +204,8 @@ bool pipeline_tts_load(PipelineTTS * pt,
+                        bool          use_fa,
+                        bool          clamp_fp16,
+                        int           max_batch,
+-                       float         codec_chunk_sec);
++                       float         codec_chunk_sec,
++                       bool          icl_non_streaming);
+ 
+ void pipeline_tts_free(PipelineTTS * pt);
+ 
+diff --git a/src/prompt-builder.h b/src/prompt-builder.h
+index b5380fc..61cbcaf 100644
+--- a/src/prompt-builder.h
++++ b/src/prompt-builder.h
+@@ -565,10 +565,12 @@ static bool prompt_builder_build(PipelineTTS *         pt,
+     // codec_lens = 1 (codec_bos) + ref_codes_T. The non_streaming_mode
+     // branch upstream pads the shorter stream so they end up the same
+     // length, except when text > codec where trailing_text_hidden carries
+-    // the leftover text rows.
++    // the leftover text rows. With pt->icl_non_streaming (upstream
++    // non_streaming_mode=True) the two streams are concatenated instead,
++    // so the ICL block spans text_lens + codec_lens rows.
+     const int text_lens_icl  = icl ? (N_ref_text + N_text + 1) : 0;
+     const int codec_lens_icl = icl ? (1 + ref_codes_T) : 0;
+-    const int icl_T          = icl ? (text_lens_icl > codec_lens_icl ? codec_lens_icl : codec_lens_icl) : 0;
++    const int icl_T          = icl ? (pt->icl_non_streaming ? text_lens_icl + codec_lens_icl : codec_lens_icl) : 0;
+ 
+     // Allocate the full output buffer.
+     // Standard layout    : N_instruct + 3 (role) + (n_pad_pre + 1) + N_text + 1 (eos) + 1 (final)
+@@ -674,7 +676,9 @@ static bool prompt_builder_build(PipelineTTS *         pt,
+         // codec stream is codec_emb(codec_bos) followed by sum over the
+         // 16 codebook embeddings of ref_codes[i, t] for each frame t.
+         // Both streams are aligned to length icl_T per the upstream
+-        // non_streaming_mode=False branch of generate_icl_prompt.
++        // non_streaming_mode=False branch of generate_icl_prompt, or
++        // concatenated per the non_streaming_mode=True branch when
++        // pt->icl_non_streaming is set.
+         const int T_icl = codec_lens_icl;  // text_lens > codec: truncate to codec, else pad text up to codec
+ 
+         // Build the codec stream [T_icl, hidden]. Row 0 is codec_bos, rows
+@@ -703,44 +707,66 @@ static bool prompt_builder_build(PipelineTTS *         pt,
+         std::memcpy(text_stream.data() + (size_t) (text_lens_icl - 1) * (size_t) hidden, tts_eos_emb.data(),
+                     (size_t) hidden * sizeof(float));
+ 
+-        // Align the two streams to T_icl. text_lens > codec: truncate
+-        // text and stash the leftover into trailing_text_hidden. text_lens
+-        // <= codec: pad text with tts_pad up to codec, trailing reduces
+-        // to tts_pad.
+-        std::vector<float> aligned_text((size_t) T_icl * (size_t) hidden, 0.0f);
+-        if (text_lens_icl >= T_icl) {
+-            // truncate text to T_icl rows, leftover goes into trailing
+-            std::memcpy(aligned_text.data(), text_stream.data(), (size_t) T_icl * (size_t) hidden * sizeof(float));
+-            const int trailing_n = text_lens_icl - T_icl;
+-            out->T_trailing      = trailing_n > 0 ? trailing_n : 1;
+-            out->trailing_text_hidden.assign((size_t) out->T_trailing * (size_t) hidden, 0.0f);
+-            if (trailing_n > 0) {
+-                std::memcpy(out->trailing_text_hidden.data(), text_stream.data() + (size_t) T_icl * (size_t) hidden,
+-                            (size_t) trailing_n * (size_t) hidden * sizeof(float));
+-            } else {
+-                std::memcpy(out->trailing_text_hidden.data(), tts_pad_emb.data(), (size_t) hidden * sizeof(float));
++        if (pt->icl_non_streaming) {
++            // Upstream non_streaming_mode=True: the full text stream summed
++            // with codec_pad, then the full codec stream summed with
++            // tts_pad. The text is consumed entirely by the prefill, so the
++            // trailing overlay collapses to a single tts_pad row.
++            for (int i = 0; i < text_lens_icl; i++) {
++                float * r = row_ptr(row + i);
++                std::memcpy(r, text_stream.data() + (size_t) i * (size_t) hidden, (size_t) hidden * sizeof(float));
++                vec_add(r, codec_pad_emb.data(), hidden);
+             }
+-        } else {
+-            // pad text with tts_pad up to T_icl, trailing = single tts_pad row
+-            std::memcpy(aligned_text.data(), text_stream.data(),
+-                        (size_t) text_lens_icl * (size_t) hidden * sizeof(float));
+-            for (int i = text_lens_icl; i < T_icl; i++) {
+-                std::memcpy(aligned_text.data() + (size_t) i * (size_t) hidden, tts_pad_emb.data(),
+-                            (size_t) hidden * sizeof(float));
++            row += text_lens_icl;
++            for (int i = 0; i < codec_lens_icl; i++) {
++                float * r = row_ptr(row + i);
++                std::memcpy(r, codec_stream.data() + (size_t) i * (size_t) hidden, (size_t) hidden * sizeof(float));
++                vec_add(r, tts_pad_emb.data(), hidden);
+             }
++            row += codec_lens_icl;
+             out->T_trailing = 1;
+             out->trailing_text_hidden.assign((size_t) hidden, 0.0f);
+             std::memcpy(out->trailing_text_hidden.data(), tts_pad_emb.data(), (size_t) hidden * sizeof(float));
+-        }
++        } else {
++            // Align the two streams to T_icl. text_lens > codec: truncate
++            // text and stash the leftover into trailing_text_hidden. text_lens
++            // <= codec: pad text with tts_pad up to codec, trailing reduces
++            // to tts_pad.
++            std::vector<float> aligned_text((size_t) T_icl * (size_t) hidden, 0.0f);
++            if (text_lens_icl >= T_icl) {
++                // truncate text to T_icl rows, leftover goes into trailing
++                std::memcpy(aligned_text.data(), text_stream.data(), (size_t) T_icl * (size_t) hidden * sizeof(float));
++                const int trailing_n = text_lens_icl - T_icl;
++                out->T_trailing      = trailing_n > 0 ? trailing_n : 1;
++                out->trailing_text_hidden.assign((size_t) out->T_trailing * (size_t) hidden, 0.0f);
++                if (trailing_n > 0) {
++                    std::memcpy(out->trailing_text_hidden.data(), text_stream.data() + (size_t) T_icl * (size_t) hidden,
++                                (size_t) trailing_n * (size_t) hidden * sizeof(float));
++                } else {
++                    std::memcpy(out->trailing_text_hidden.data(), tts_pad_emb.data(), (size_t) hidden * sizeof(float));
++                }
++            } else {
++                // pad text with tts_pad up to T_icl, trailing = single tts_pad row
++                std::memcpy(aligned_text.data(), text_stream.data(),
++                            (size_t) text_lens_icl * (size_t) hidden * sizeof(float));
++                for (int i = text_lens_icl; i < T_icl; i++) {
++                    std::memcpy(aligned_text.data() + (size_t) i * (size_t) hidden, tts_pad_emb.data(),
++                                (size_t) hidden * sizeof(float));
++                }
++                out->T_trailing = 1;
++                out->trailing_text_hidden.assign((size_t) hidden, 0.0f);
++                std::memcpy(out->trailing_text_hidden.data(), tts_pad_emb.data(), (size_t) hidden * sizeof(float));
++            }
+ 
+-        // Sum aligned_text + codec_stream into the input embed at the
+-        // current row offset.
+-        for (int i = 0; i < T_icl; i++) {
+-            float * r = row_ptr(row + i);
+-            std::memcpy(r, aligned_text.data() + (size_t) i * (size_t) hidden, (size_t) hidden * sizeof(float));
+-            vec_add(r, codec_stream.data() + (size_t) i * (size_t) hidden, hidden);
++            // Sum aligned_text + codec_stream into the input embed at the
++            // current row offset.
++            for (int i = 0; i < T_icl; i++) {
++                float * r = row_ptr(row + i);
++                std::memcpy(r, aligned_text.data() + (size_t) i * (size_t) hidden, (size_t) hidden * sizeof(float));
++                vec_add(r, codec_stream.data() + (size_t) i * (size_t) hidden, hidden);
++            }
++            row += T_icl;
+         }
+-        row += T_icl;
+     }
+ 
+     if (row != T_ctx) {
+diff --git a/src/qwen.cpp b/src/qwen.cpp
+index 5234907..7f82f14 100644
+--- a/src/qwen.cpp
++++ b/src/qwen.cpp
+@@ -237,6 +237,8 @@ void qt_init_default_params(struct qt_init_params * p) {
+     p->max_batch   = 1;
+ 
+     p->codec_chunk_sec = QT_CODEC_CHUNK_SEC_DEFAULT;
++
++    p->icl_non_streaming = false;
+ }
+ 
+ void qt_tts_default_params(struct qt_tts_params * p) {
+@@ -447,6 +449,10 @@ struct qt_context * qt_init(const struct qt_init_params * params) {
+     // handle, read by every buffered decode it runs.
+     const float chunk_sec = params->codec_chunk_sec > 0.0f ? params->codec_chunk_sec : QT_CODEC_CHUNK_SEC_DEFAULT;
+ 
++    // Tail field gated on the caller's ABI: a v5 struct never wrote it.
++    const bool icl_non_streaming = params->abi_version >= 6 ? params->icl_non_streaming : false;
++    qt_log(QT_LOG_INFO, "[Qwen] ICL prompt layout: non_streaming_mode=%s", icl_non_streaming ? "True" : "False");
++
+     // new qt_context() value-initialises every field: POD aggregates
+     // (BackendPair, PipelineTTS) are zero-init, std containers in
+     // BPETokenizer construct empty.
+@@ -464,7 +470,7 @@ struct qt_context * qt_init(const struct qt_init_params * params) {
+         }
+ 
+         if (!pipeline_tts_load(&q->pt, params->talker_path, params->codec_path, q->bp, params->use_fa,
+-                               params->clamp_fp16, max_batch, chunk_sec)) {
++                               params->clamp_fp16, max_batch, chunk_sec, icl_non_streaming)) {
+             qt_throw("qt_init: pipeline_tts_load failed for '%s' / '%s'", params->talker_path, params->codec_path);
+         }
+ 
+diff --git a/src/qwen.h b/src/qwen.h
+index e12542a..ed57fa8 100644
+--- a/src/qwen.h
++++ b/src/qwen.h
+@@ -59,7 +59,7 @@ extern "C" {
+ // git short hash + commit date string returned by qt_version(); for
+ // binding compat checks, QT_ABI_VERSION is the only number that
+ // matters.
+-#define QT_ABI_VERSION 5
++#define QT_ABI_VERSION 6
+ 
+ // Oldest struct layout this build addresses. A v4 or older
+ // qt_tts_params places its trailing fields at offsets this build does
+@@ -157,11 +157,20 @@ struct qt_init_params {
+     // frames at 12.5 Hz). The streaming path frames its own chunks
+     // through the persistent codec stream state and reads none of this.
+     float codec_chunk_sec;
++
++    // ICL clone prompt layout (abi_version >= 6). false keeps the
++    // upstream non_streaming_mode=False branch of generate_icl_prompt:
++    // text and codec streams aligned to the codec length and summed.
++    // true selects the non_streaming_mode=True branch: the whole
++    // [ref_text ; text ; tts_eos] stream over codec_pad, then
++    // [codec_bos ; ref_codes] over tts_pad, trailing text = tts_pad.
++    // Only the ICL clone path reads it.
++    bool icl_non_streaming;
+ };
+ 
+ // Initialise to the standard defaults: both paths NULL (caller must set
+ // them before calling qt_init), use_fa true, clamp_fp16 false,
+-// max_batch 1, codec_chunk_sec 24.0.
++// max_batch 1, codec_chunk_sec 24.0, icl_non_streaming false.
+ QT_API void qt_init_default_params(struct qt_init_params * p);
+ 
+ // Allocate every module described by params. Returns NULL on any
+diff --git a/tests/debug-clone-cossim.py b/tests/debug-clone-cossim.py
+index c23c152..213ca03 100755
+--- a/tests/debug-clone-cossim.py
++++ b/tests/debug-clone-cossim.py
+@@ -10,6 +10,9 @@ Inputs (relative to CWD = tests/) :
+ Default mode is greedy on both sides, non_streaming_mode=False which is
+ the ICL branch upstream : text + codec streams are aligned to the codec
+ length, the shorter one padded with tts_pad / truncated as needed.
++--non-streaming switches both sides to non_streaming_mode=True (Python)
++and --icl-non-streaming (C++) : the full text stream over codec_pad, then
++the full codec stream over tts_pad.
+ 
+ Cote Python the speaker embedding is captured directly via
+ model.extract_speaker_embedding, and the reference codec frames via
+@@ -281,6 +284,8 @@ def main():
+     ap.add_argument("--max-new-tokens", type=int, default=64)
+     ap.add_argument("--trace",          action="store_true",
+                     help="print per sample u and idx for the first 32 samples")
++    ap.add_argument("--non-streaming",  action="store_true",
++                    help="ICL prompt in the non_streaming_mode=True layout on both sides")
+     args = ap.parse_args()
+ 
+     cc.ensure_dir(DUMP_PT)
+@@ -300,7 +305,7 @@ def main():
+     print(f"[Input] RefAudio: {args.ref_wav}")
+     print(f"[Input] RefText: {len(ref_text)} chars: {ref_text[:60]}{'...' if len(ref_text) > 60 else ''}")
+     print(f"[Input] Lang: {args.lang} Seed: {args.seed} MaxNewTokens: {args.max_new_tokens}")
+-    print(f"[Input] Mode: greedy ICL")
++    print(f"[Input] Mode: greedy ICL non_streaming_mode={args.non_streaming}")
+ 
+     torch.manual_seed(args.seed)
+     np.random.seed(args.seed)
+@@ -412,7 +417,7 @@ def main():
+         ref_ids=[ref_ids],
+         voice_clone_prompt=voice_clone_prompt_dict,
+         languages=[args.lang],
+-        non_streaming_mode=False,
++        non_streaming_mode=args.non_streaming,
+         max_new_tokens=args.max_new_tokens,
+         **cc.GEN_KWARGS_GREEDY,
+     )
+@@ -463,6 +468,8 @@ def main():
+         "-o",          args.out_cpp,
+         "--greedy",
+     ]
++    if args.non_streaming:
++        cmd.append("--icl-non-streaming")
+     print(f"[GGML] Cmd: {' '.join(cmd)}")
+     r = subprocess.run(cmd, input=text, text=True)
+     if r.returncode != 0:
+diff --git a/tools/qwen-tts.cpp b/tools/qwen-tts.cpp
+index 4399172..fa6054a 100644
+--- a/tools/qwen-tts.cpp
++++ b/tools/qwen-tts.cpp
+@@ -69,6 +69,7 @@ static void print_usage(const char * prog) {
+             "Debug:\n"
+             "  --no-fa                 Disable flash attention\n"
+             "  --clamp-fp16            Clamp hidden states to FP16 range\n"
++            "  --icl-non-streaming     ICL clone prompt in the upstream non_streaming_mode=True layout\n"
+             "  --dump <dir>            Dump intermediate tensors (f32) to <dir>\n",
+             prog, QT_DEFAULT_MAX_NEW_TOKENS, (double) QT_DEFAULT_TEMPERATURE, QT_DEFAULT_TOP_K,
+             (double) QT_DEFAULT_TOP_P, (double) QT_DEFAULT_REPETITION_PENALTY,
+@@ -91,6 +92,7 @@ struct Args {
+     bool         clamp_fp16;
+     bool         stream_by_line;
+     float        codec_chunk_sec;
++    bool         icl_non_streaming;
+ 
+     // Synthesis params seeded by qt_tts_default_params; sampling flags
+     // write straight into it, so only what the user sets deviates.
+@@ -173,15 +175,16 @@ static bool read_text_file(const char * path, std::string & out) {
+ }
+ 
+ static bool parse_args(int argc, char ** argv, Args & a) {
+-    a                 = {};
+-    a.lang            = "auto";
+-    a.format          = "wav16";
+-    a.use_fa          = true;
+-    a.clamp_fp16      = false;
+-    a.stream_by_line  = false;
++    a                   = {};
++    a.lang              = "auto";
++    a.format            = "wav16";
++    a.use_fa            = true;
++    a.clamp_fp16        = false;
++    a.stream_by_line    = false;
++    a.icl_non_streaming = false;
+     // Chunk sentinel : qt_init resolves a non positive value to the
+     // library default.
+-    a.codec_chunk_sec = 0.0f;
++    a.codec_chunk_sec   = 0.0f;
+     qt_tts_default_params(&a.tts);
+     for (int i = 1; i < argc; i++) {
+         const char * arg = argv[i];
+@@ -238,6 +241,8 @@ static bool parse_args(int argc, char ** argv, Args & a) {
+             a.clamp_fp16 = true;
+         } else if (std::strcmp(arg, "--stream-by-line") == 0) {
+             a.stream_by_line = true;
++        } else if (std::strcmp(arg, "--icl-non-streaming") == 0) {
++            a.icl_non_streaming = true;
+         } else if (std::strcmp(arg, "--codec-chunk-dur") == 0 && i + 1 < argc) {
+             a.codec_chunk_sec = (float) std::atof(argv[++i]);
+         } else if (std::strcmp(arg, "-o") == 0 && i + 1 < argc) {
+@@ -256,11 +261,12 @@ static int run(const Args & a) {
+     // off the two GGUF paths and reports qt_last_error on failure.
+     qt_init_params iparams;
+     qt_init_default_params(&iparams);
+-    iparams.talker_path     = a.model;
+-    iparams.codec_path      = a.codec;
+-    iparams.use_fa          = a.use_fa;
+-    iparams.clamp_fp16      = a.clamp_fp16;
+-    iparams.codec_chunk_sec = a.codec_chunk_sec;
++    iparams.talker_path       = a.model;
++    iparams.codec_path        = a.codec;
++    iparams.use_fa            = a.use_fa;
++    iparams.clamp_fp16        = a.clamp_fp16;
++    iparams.codec_chunk_sec   = a.codec_chunk_sec;
++    iparams.icl_non_streaming = a.icl_non_streaming;
+ 
+     qt_context * q = qt_init(&iparams);
+     if (!q) {
+diff --git a/tools/tts-server.cpp b/tools/tts-server.cpp
+index 58c014a..327fbac 100644
+--- a/tools/tts-server.cpp
++++ b/tools/tts-server.cpp
+@@ -53,6 +53,7 @@ static void print_usage(const char * prog) {
+             "  --max-batch <n>         Concurrent requests batched on the GPU (default: 1)\n"
+             "  --no-fa                 Disable flash attention\n"
+             "  --clamp-fp16            Clamp hidden states to FP16 range\n"
++            "  --icl-non-streaming     ICL clone prompt in the upstream non_streaming_mode=True layout\n"
+             "  --codec-chunk-dur <f>   Codec decode chunk duration in seconds, wav responses (default: 24.0)\n",
+             prog);
+ }
+@@ -70,12 +71,13 @@ int main(int argc, char ** argv) {
+     std::string   model_alias;
+     std::string   lang = "auto";
+     server_config cfg;
+-    bool          use_fa          = true;
+-    bool          clamp_fp16      = false;
+-    int           max_batch       = 1;
++    bool          use_fa            = true;
++    bool          clamp_fp16        = false;
++    int           max_batch         = 1;
++    bool          icl_non_streaming = false;
+     // Chunk sentinel : qt_init resolves a non positive value to the
+     // library default.
+-    float         codec_chunk_dur = 0.0f;
++    float         codec_chunk_dur   = 0.0f;
+ 
+     for (int i = 1; i < argc; i++) {
+         const char * arg = argv[i];
+@@ -95,6 +97,8 @@ int main(int argc, char ** argv) {
+             use_fa = false;
+         } else if (!std::strcmp(arg, "--clamp-fp16")) {
+             clamp_fp16 = true;
++        } else if (!std::strcmp(arg, "--icl-non-streaming")) {
++            icl_non_streaming = true;
+         } else if (!std::strcmp(arg, "--max-batch") && i + 1 < argc) {
+             max_batch = std::atoi(argv[++i]);
+         } else if (!std::strcmp(arg, "--codec-chunk-dur") && i + 1 < argc) {
+@@ -112,12 +116,13 @@ int main(int argc, char ** argv) {
+ 
+     struct qt_init_params iparams;
+     qt_init_default_params(&iparams);
+-    iparams.talker_path     = talker_path;
+-    iparams.codec_path      = codec_path;
+-    iparams.use_fa          = use_fa;
+-    iparams.clamp_fp16      = clamp_fp16;
+-    iparams.max_batch       = max_batch;
+-    iparams.codec_chunk_sec = codec_chunk_dur;
++    iparams.talker_path       = talker_path;
++    iparams.codec_path        = codec_path;
++    iparams.use_fa            = use_fa;
++    iparams.clamp_fp16        = clamp_fp16;
++    iparams.max_batch         = max_batch;
++    iparams.codec_chunk_sec   = codec_chunk_dur;
++    iparams.icl_non_streaming = icl_non_streaming;
+ 
+     struct qt_context * q = qt_init(&iparams);
+     if (!q) {
