@@ -579,3 +579,36 @@ which reproduces DS6 on 2,235 of 2,235 rows, and scored against DS6's stored
 `jiwer.wer` on the stored columns reproduces `tts_rt_wer` exactly. Arm C's
 text differs from that reference only as listed in the splitting entry above.
 UTMOS22 via `utmos-pytorch==0.1.0` `UTMOSScoreTorch`, as DS6 was scored.
+
+---
+
+## 2026-10-11 -- Demo notebooks
+
+**Issue:** The Streamlit demos may not be used to show the pipeline, and
+there was no lighter way to show it live: `run_staged` reloads every model
+per conversation, and `app/gpu_chat_demo.py` needs Streamlit and a 40 GB GPU.
+
+**Reason:** A notebook runs on Colab or a teammate's own machine with no
+server, and can show every stage's output next to the answer.
+
+**Decision:** Three notebooks on branch `demo-notebooks`: `demo_audio`
+(spoken question in, spoken answer out), `demo_chat` (typed questions, speech
+optional) and `demo_replay` (saved sessions and golden-check results, no
+GPU). The live two use `src/demo.py`, a resident session that keeps each
+model loaded after first use and otherwise follows `run_staged`'s stage order
+and conversation rules. Differences from the evaluated pipeline, all
+deliberate and shown in the output:
+
+- Typed questions skip stages 1 and 2; GlotLID (the stage 3 text LID) picks
+  the conversation's language on the first question.
+- `lang=` on a first question sets the language without LID, as the
+  Streamlit GPU demo's language picker does.
+- Speech defaults to qwentts.cpp, segmented mode, Q8_0 weights, for GPU
+  memory headroom on an L4; provisional until the Stage 7 A/B reports.
+- Models stay resident; greedy outputs are expected to match staged runs,
+  not verified.
+
+`scripts/build_qwentts.sh` gained `--cache-dir`: a build is cached under a key
+of everything that shapes the binaries and restored only after passing the
+same checks as a fresh build (tested on the CPU build: build, delete,
+restore). Not yet run on a GPU.

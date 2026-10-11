@@ -56,6 +56,12 @@ gpu = [
     "openpyxl>=3.1",
 ]
 
+# The demo notebooks' chat box (notebooks/demo_*.ipynb). >=7.6 so Colab keeps
+# its own preinstalled copy instead of upgrading it.
+demo = [
+    "ipywidgets>=7.6",
+]
+
 # Golden check and scoring only.
 eval = [
     "sacrebleu>=2.4",
