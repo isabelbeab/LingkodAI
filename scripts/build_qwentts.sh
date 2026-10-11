@@ -7,6 +7,14 @@
 #                                                   (sm_75 T4, sm_80 A100, sm_89 L4)
 #   scripts/build_qwentts.sh --cuda-arch native     CUDA build for this machine's GPU only (faster)
 #   scripts/build_qwentts.sh --cpu                  CPU-only compile check (laptop), no model loads
+#   ... --cache-dir DIR                             reuse a cached build from DIR, or cache this one there
+#
+# --cache-dir keys a cached build on everything that shapes the binaries: the
+# pinned commits, the patch files, the mode and CUDA arch (for native, this
+# GPU's compute capability), the compiler versions, the extra cmake arguments
+# and the build path (the binaries carry an absolute RUNPATH). A key match
+# restores the binaries and shared libraries and runs the same checks as a
+# fresh build; any other change builds from source and caches the result.
 #
 # Environment:
 #   QWENTTS_DIR   clone and build location (default: build/qwentts.cpp under the
@@ -41,13 +49,17 @@ die() {
 
 MODE="cuda"
 CUDA_ARCH="$DEFAULT_CUDA_ARCH"
+CACHE_DIR=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cpu) MODE="cpu"; shift ;;
         --cuda-arch)
             [[ $# -ge 2 ]] || die "--cuda-arch needs a value, e.g. '75;80;89' or native"
             CUDA_ARCH="$2"; shift 2 ;;
-        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        --cache-dir)
+            [[ $# -ge 2 ]] || die "--cache-dir needs a directory"
+            CACHE_DIR="$2"; shift 2 ;;
+        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
         *) die "unknown argument '$1' (see --help)" ;;
     esac
 done
@@ -86,8 +98,10 @@ echo "cmake:          $(first_line "$CMAKE" --version)"
 echo "c++:            $(first_line c++ --version)"
 echo "cpus:           $(getconf _NPROCESSORS_ONLN)"
 echo "extra cmake:    ${QWENTTS_CMAKE_ARGS:-(none)}"
+echo "cache dir:      ${CACHE_DIR:-(none)}"
 
 NVCC_PATH=""
+GPU_LINE=""
 if [[ "$MODE" == "cuda" ]]; then
     NVCC_PATH="${NVCC:-$(command -v nvcc || echo /usr/local/cuda/bin/nvcc)}"
     [[ -x "$NVCC_PATH" ]] || die "nvcc not found at '$NVCC_PATH' (set NVCC, or use --cpu for a compile check)"
@@ -118,6 +132,67 @@ mapfile -t ON_DISK < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' -pr
 EXPECTED="$(printf '%s\n' "${PATCHES[@]}" | sort)"
 [[ "$(printf '%s\n' "${ON_DISK[@]}")" == "$EXPECTED" ]] \
     || die "patch files on disk (${ON_DISK[*]}) do not match the list in this script (${PATCHES[*]})"
+PATCH_SUMS=()
+for p in "${PATCHES[@]}"; do
+    PATCH_SUMS+=("$(sha256sum "$PATCH_DIR/$p" | awk '{print $1}')  $p")
+done
+
+# Checks that need no model: the C ABI smoke test, both patched flags present
+# in the binaries (an unpatched build would lack them), and every shared
+# library resolvable.
+check_binaries() {
+    "$BUILD_DIR/test-abi-c" || die "test-abi-c failed"
+    local bin usage flag
+    for bin in tts-server qwen-tts; do
+        usage="$("$BUILD_DIR/$bin" 2>&1 || true)"
+        for flag in --icl-non-streaming --talker-ctx; do
+            grep -q -- "$flag" <<<"$usage" || die "$bin usage lacks $flag: the patches did not reach this binary"
+        done
+        if ldd "$BUILD_DIR/$bin" | grep -q "not found"; then
+            ldd "$BUILD_DIR/$bin" | grep "not found" >&2
+            die "$bin has unresolved shared libraries (above)"
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Build cache: restore a matching build instead of compiling.
+# ---------------------------------------------------------------------------
+CACHE_FILE=""
+if [[ -n "$CACHE_DIR" ]]; then
+    KEY_TEXT="$(
+        echo "qwentts $QWENTTS_COMMIT"
+        echo "ggml $GGML_COMMIT"
+        printf 'patch %s\n' "${PATCH_SUMS[@]}"
+        echo "mode $MODE"
+        echo "build dir $BUILD_DIR"
+        echo "extra cmake ${QWENTTS_CMAKE_ARGS:-}"
+        echo "cmake $(first_line "$CMAKE" --version)"
+        echo "c++ $(first_line c++ --version)"
+        if [[ "$MODE" == "cuda" ]]; then
+            echo "cuda arch $CUDA_ARCH"
+            echo "nvcc $("$NVCC_PATH" --version | grep -i release)"
+            # native builds for this GPU only, so the GPU is part of the key.
+            [[ "$CUDA_ARCH" != "native" ]] || echo "gpu compute cap $(echo "$GPU_LINE" | awk -F', ' '{print $2}')"
+        fi
+    )"
+    KEY="$(sha256sum <<<"$KEY_TEXT" | cut -c1-16)"
+    CACHE_FILE="$CACHE_DIR/qwentts-$MODE-$KEY.tar.gz"
+    echo "[build_qwentts] cache key $KEY:"
+    while IFS= read -r line; do echo "    $line"; done <<<"$KEY_TEXT"
+    if [[ -f "$CACHE_FILE" ]]; then
+        echo "[build_qwentts] restoring $CACHE_FILE into $BUILD_DIR"
+        mkdir -p "$BUILD_DIR"
+        tar -xzf "$CACHE_FILE" -C "$BUILD_DIR"
+        check_binaries
+        echo "== BUILD_INFO ($BUILD_DIR/BUILD_INFO.txt, from the cached build) =="
+        cat "$BUILD_DIR/BUILD_INFO.txt"
+        echo "[build_qwentts] OK (restored from cache, not rebuilt)"
+        exit 0
+    fi
+    echo "[build_qwentts] no cached build for this key; building from source"
+fi
+echo
 
 # ---------------------------------------------------------------------------
 # Source: clone, or reuse an existing clone of the same upstream.
@@ -142,13 +217,10 @@ git -C "$QWENTTS_DIR" submodule update --init --recursive
 GOT_GGML="$(git -C "$QWENTTS_DIR/ggml" rev-parse HEAD)"
 [[ "$GOT_GGML" == "$GGML_COMMIT" ]] || die "ggml submodule is at $GOT_GGML, expected $GGML_COMMIT"
 
-PATCH_SUMS=()
 for p in "${PATCHES[@]}"; do
     git -C "$QWENTTS_DIR" apply --check "$PATCH_DIR/$p" || die "patch does not apply cleanly: $p"
     git -C "$QWENTTS_DIR" apply "$PATCH_DIR/$p"
-    SUM="$(sha256sum "$PATCH_DIR/$p" | awk '{print $1}')"
-    PATCH_SUMS+=("$SUM  $p")
-    echo "[build_qwentts] applied $p (sha256 $SUM)"
+    echo "[build_qwentts] applied $p (sha256 $(sha256sum "$PATCH_DIR/$p" | awk '{print $1}'))"
 done
 echo
 
@@ -170,17 +242,7 @@ echo "[build_qwentts] $CMAKE ${CMAKE_ARGS[*]}"
 "$CMAKE" --build "$BUILD_DIR" --config Release -j "$(getconf _NPROCESSORS_ONLN)" --target "${TARGETS[@]}"
 echo
 
-# ---------------------------------------------------------------------------
-# Checks that need no model: the C ABI smoke test, and both patched flags
-# present in the binaries (an unpatched build would lack them).
-# ---------------------------------------------------------------------------
-"$BUILD_DIR/test-abi-c" || die "test-abi-c failed"
-for bin in tts-server qwen-tts; do
-    USAGE="$("$BUILD_DIR/$bin" 2>&1 || true)"
-    for flag in --icl-non-streaming --talker-ctx; do
-        grep -q -- "$flag" <<<"$USAGE" || die "$bin usage lacks $flag: the patches did not reach this binary"
-    done
-done
+check_binaries
 VERSION_LINE="$("$BUILD_DIR/tts-server" 2>&1 | head -n 1 || true)"
 
 INFO="$BUILD_DIR/BUILD_INFO.txt"
@@ -206,4 +268,18 @@ INFO="$BUILD_DIR/BUILD_INFO.txt"
 } >"$INFO"
 echo "== BUILD_INFO ($INFO) =="
 cat "$INFO"
+
+if [[ -n "$CACHE_FILE" ]]; then
+    # Only what runs: the three binaries, every shared library, BUILD_INFO.
+    # Written beside the target and renamed, so a cut-off copy never matches.
+    mkdir -p "$CACHE_DIR"
+    mapfile -t CACHED < <(cd "$BUILD_DIR" && {
+        printf '%s\n' "${TARGETS[@]}" BUILD_INFO.txt
+        # Versioned names (libggml.so.0) are symlinks; tar keeps them as links.
+        find . \( -type f -o -type l \) \( -name '*.so' -o -name '*.so.*' \) -printf '%P\n'
+    } | sort)
+    tar -czf "$CACHE_FILE.part" -C "$BUILD_DIR" "${CACHED[@]}"
+    mv "$CACHE_FILE.part" "$CACHE_FILE"
+    echo "[build_qwentts] cached ${#CACHED[@]} files to $CACHE_FILE ($(du -h "$CACHE_FILE" | cut -f1))"
+fi
 echo "[build_qwentts] OK"
