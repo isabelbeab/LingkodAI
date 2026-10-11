@@ -115,6 +115,78 @@ def test_load_runs_rejects_duplicates(tmp_path):
         tts_ab.load_runs([tmp_path / "r1", tmp_path / "r2"])
 
 
+def test_read_jsonl_removes_a_cut_off_last_line(tmp_path, capsys):
+    path = tmp_path / "rows.jsonl"
+    path.write_text('{"clip_id": "c1"}\n{"clip_id": "c2"}\n{"clip_id": "c')
+    assert tts_ab.read_jsonl(path) == [{"clip_id": "c1"}, {"clip_id": "c2"}]
+    assert "cut-off last line" in capsys.readouterr().out
+    assert path.read_text() == '{"clip_id": "c1"}\n{"clip_id": "c2"}\n'
+
+
+def test_read_jsonl_ends_a_whole_last_record_with_a_newline(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_text('{"clip_id": "c1"}')
+    assert tts_ab.read_jsonl(path) == [{"clip_id": "c1"}]
+    assert path.read_text() == '{"clip_id": "c1"}\n'
+
+
+def test_read_jsonl_raises_on_a_bad_line_before_the_last(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_text('{"clip_id": "c1"}\n{"clip\n{"clip_id": "c3"}\n')
+    with pytest.raises(ValueError, match="record 2 of 3"):
+        tts_ab.read_jsonl(path)
+    assert tts_ab.read_jsonl(tmp_path / "absent.jsonl") == []
+
+
+def test_synth_resume_redoes_rows_whose_wav_did_not_reach_drive(tmp_path, monkeypatch, capsys):
+    import types
+
+    import soundfile as sf
+
+    from src import tts
+
+    sr = 24000
+    cids = [f"eng_01_mt_0{i}" for i in range(1, 6)]
+    ds6 = pd.DataFrame([{"clip_id": c, "final_lang": "eng", "rag_answer_native": f"answer {c}",
+                         "verbalized_text": f"answer {c}"} for c in cids]).set_index("clip_id", drop=False)
+    monkeypatch.setattr(tts_ab, "load_ds6", lambda path: ds6)
+    sel = tmp_path / "selection.csv"
+    pd.DataFrame({"clip_id": cids, "final_lang": "eng", "tags": "golden"}).to_csv(sel, index=False)
+
+    out = tmp_path / "A-hf"
+    (out / "wavs").mkdir(parents=True)
+    tone = np.zeros(sr, dtype=np.float32)
+    for cid in cids[:3]:
+        sf.write(str(out / "wavs" / f"{cid}.wav"), tone, sr)
+    (out / "wavs" / f"{cids[1]}.wav").unlink()  # 02: the row synced, the WAV never did
+    wav3 = out / "wavs" / f"{cids[2]}.wav"
+    wav3.write_bytes(wav3.read_bytes()[: len(wav3.read_bytes()) // 2])  # 03: cut short
+    prior = [{"label": "A-hf", "clip_id": c, "ok": True, "audio_s": 1.0} for c in cids[:3]]
+    prior.append({"label": "A-hf", "clip_id": cids[3], "ok": False, "audio_s": None})  # 04: text only, a result
+    (out / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in prior) + '{"label": "A-h')
+
+    spoken = []
+
+    def fake_turn(bundle, cid, text, lang, init_set):
+        spoken.append(cid)
+        return types.SimpleNamespace(ok=True, audio=tone, sr=sr, failure_reason=None, wall_sec=2.0, rtf=2.0)
+
+    monkeypatch.setattr(tts, "load", lambda: types.SimpleNamespace(unload=lambda: None))
+    monkeypatch.setattr(tts, "synthesize_turn", fake_turn)
+    monkeypatch.setattr(sys, "argv", ["tts_ab.py", "synth", "--ds6", "x.xlsx", "--selection", str(sel),
+                                      "--arm", "A", "--label", "A-hf", "--out", str(out)])
+
+    assert tts_ab.main() == 0
+
+    assert spoken == [cids[1], cids[2], cids[4]]
+    log = capsys.readouterr().out
+    assert "cut-off last line" in log and "redoing 2 recorded row(s)" in log
+    rows = tts_ab.read_jsonl(out / "rows.jsonl")
+    assert [r["clip_id"] for r in rows] == [cids[0], cids[3], cids[1], cids[2], cids[4]]
+    assert sf.info(str(wav3)).frames == sr
+    tts_ab.load_runs([out])  # no duplicate rows
+
+
 def test_synth_refuses_cpp_options_for_arm_a(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["tts_ab.py", "synth", "--ds6", "x.xlsx", "--selection", "s.csv", "--arm", "A",
                                       "--label", "A", "--out", "o", "--seed", "1"])

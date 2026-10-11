@@ -132,7 +132,9 @@ either backend, now records `tts_wall_sec` and `tts_rtf`.
 ([open in Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/tts-cpp/notebooks/tts_cpp_ab_colab.ipynb))
 validates the prompt patch against qwen-tts, then runs `scripts/tts_ab.py`:
 the same DS6 answers through `src/tts.py` (arm A), parity (B), segmented (C)
-and segmented on Q8_0, scored with the DS6/DS7 judge and UTMOS22. Every way
+and segmented on Q8_0, scored with the DS6/DS7 judge and UTMOS22. It writes
+every log, WAV and score straight to a Google Drive run folder, so a dropped
+runtime loses no finished rows and the same cells resume the run. Every way
 this branch departs from the evaluated pipeline is in `CHANGELOG.md`, under
 2026-10-11.
 

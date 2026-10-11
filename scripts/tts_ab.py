@@ -25,6 +25,11 @@ wall time, RTF, audio length against the length expected from the verbalized
 text, and for B and C the segment records and simulated play-ahead. Resumes
 where it stopped; a cpp arm reuses the base seed recorded in run.json.
 
+Resuming after a dropped runtime (the Colab notebook keeps every output on
+Google Drive): a cut-off last line in rows.jsonl or a score cache is
+reported and removed, and a recorded row whose WAV is missing or does not
+match its recorded length is reported and synthesized again.
+
 score: the DS6/DS7 judge, ported from the DS2/DS5 judge scripts: the
 per-language fine-tuned Whisper-medium (lingkodai/lingkodai-whisper-{lang};
 identity with JOJIE's best_checkpoints is not verified), base whisper-medium
@@ -113,6 +118,36 @@ def load_ds6(path: Path):
 
 def ref_words(text) -> int:
     return len(str(text).split())
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """The records in a JSONL file this script appends to.
+
+    A process that dies mid-append (a Colab runtime dropping while the file
+    sits on Google Drive) can leave a cut-off last line. That line is
+    reported and removed, so the next append starts on a clean line; a bad
+    line anywhere else raises.
+    """
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    records = []
+    for k, line in enumerate(lines):
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            if k < len(lines) - 1:
+                raise ValueError(f"{path}: record {k + 1} of {len(lines)} is not valid JSON") from None
+            print(f"WARNING: {path}: removing a cut-off last line: {line[:80]!r}")
+    if len(records) < len(lines) or (text and not text.endswith("\n")):
+        write_jsonl(path, records)
+    return records
+
+
+def write_jsonl(path: Path, records: list[dict]) -> None:
+    path.write_text("".join(json.dumps(r, ensure_ascii=False, default=float) + "\n" for r in records),
+                    encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +253,27 @@ def _row_record(arm: str, label: str, sel_row, result, chars: int) -> dict:
     return rec
 
 
+def split_rows_missing_audio(records: list[dict], wav_dir: Path) -> tuple[list[dict], list[str]]:
+    """(rows to keep, clip_ids to redo): a recorded ok row whose WAV is
+    missing, unreadable or not as long as its recorded audio_s is redone (the
+    row reached Drive, the WAV did not). Text-only rows are results; kept."""
+    import soundfile as sf
+
+    kept, redo = [], []
+    for rec in records:
+        if rec["ok"]:
+            wav = wav_dir / f"{rec['clip_id']}.wav"
+            try:
+                info = sf.info(str(wav)) if wav.is_file() else None
+            except RuntimeError:
+                info = None
+            if info is None or info.frames != round(rec["audio_s"] * info.samplerate):
+                redo.append(rec["clip_id"])
+                continue
+        kept.append(rec)
+    return kept, redo
+
+
 def cmd_synth(args) -> int:
     import pandas as pd
     import soundfile as sf
@@ -242,9 +298,11 @@ def cmd_synth(args) -> int:
 
     df = load_ds6(args.ds6)
     sel = pd.read_csv(args.selection)
-    done = set()
-    if rows_path.exists():
-        done = {json.loads(line)["clip_id"] for line in rows_path.read_text().splitlines() if line.strip()}
+    records, redo = split_rows_missing_audio(read_jsonl(rows_path), args.out / "wavs")
+    if redo:
+        print(f"WARNING: redoing {len(redo)} recorded row(s) whose WAV is missing or cut short: {redo}")
+        write_jsonl(rows_path, records)
+    done = {r["clip_id"] for r in records}
     todo = sel[~sel["clip_id"].isin(done)]
     print(f"{len(sel)} selected, {len(done)} already done, {len(todo)} to synthesize")
     init_set = tts.load_init_set(args.init_set)
@@ -355,14 +413,7 @@ def utmos_score(path: Path, utmos, device: str) -> float:
 
 
 def _load_cache(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    out = {}
-    for line in path.read_text().splitlines():
-        if line.strip():
-            d = json.loads(line)
-            out[(d["label"], d["clip_id"])] = d["value"]
-    return out
+    return {(d["label"], d["clip_id"]): d["value"] for d in read_jsonl(path)}
 
 
 def _append_cache(path: Path, label: str, clip_id: str, value) -> None:
@@ -378,7 +429,7 @@ def load_runs(run_dirs: list[Path]):
         rows_path = d / "rows.jsonl"
         if not rows_path.exists():
             raise FileNotFoundError(f"{rows_path} not found; run synth first")
-        rows = [json.loads(line) for line in rows_path.read_text().splitlines() if line.strip()]
+        rows = read_jsonl(rows_path)
         for r in rows:
             r["wav"] = str(d / "wavs" / f"{r['clip_id']}.wav") if r["ok"] else None
         frames.append(pd.DataFrame(rows))
