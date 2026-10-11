@@ -412,3 +412,14 @@ def test_synthesize_raises_where_synthesize_turn_reports(fake):
     bundle = fake.load({"error_on": ["Bring"]})
     with pytest.raises(RuntimeError, match="HTTP 502"):
         tts_cpp.synthesize(bundle, ENG_TEXT, "eng", set())
+
+
+def test_segmented_drops_a_parenthetical_acronym_exactly_when_parity_does():
+    # "(PRC)" sits in a different segment from the bare "PRC", so a per-segment
+    # strip alone would keep it; the whole-answer strip drops it, as parity does.
+    text = "Mag-file sa Professional Regulation Commission (PRC). Pumunta sa PRC office bukas."
+    seg = " ".join(t for t, _ in tts_cpp.text_segments(text, "fil", {"PRC"}, "segmented"))
+    par = " ".join(t for t, _ in tts_cpp.text_segments(text, "fil", {"PRC"}, "parity"))
+
+    assert "(" not in seg and "(" not in par
+    assert seg.split() == par.split()

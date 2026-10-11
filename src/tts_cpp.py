@@ -17,7 +17,11 @@ Two modes, chosen at load():
              vendored ceb_segmentation.split_for_synthesis (140 chars, pauses
              0.20 / 0.45 / 0.60 s), the order ceb's own pipeline uses. "No.",
              "Nos.", "(s." "A.Y." and "R.A." stay attached to the number that
-             follows (see _ABBREV_GUARD). Each segment is capped at
+             follows (see _ABBREV_GUARD). For fil and eng the verbalizers'
+             paren_conditional_strip runs once on the whole answer before the
+             split, so a parenthetical acronym is dropped exactly when parity
+             drops it (it judges against the whole text, which a segment
+             alone would not have). Each segment is capped at
              2 x expected frames + 25, expected frames being 0.84 per
              verbalized character (DS6: correlation 0.998 ceb, 0.995 fil, 0.94
              eng). A segment that runs to its cap, or returns no audio, is
@@ -190,6 +194,14 @@ def text_segments(text: str, lang: str, initialism_set: set, mode: str) -> list[
         if lang == "fil":
             return [(verbalize_fil_prc(prepped, initialism_set=initialism_set), 0.0)]
         return [(verbalize_eng_prc(prepped, initialism_set=initialism_set), 0.0)]
+    if lang in ("fil", "eng"):
+        # verbalize_fil_prc / verbalize_eng_prc strip a parenthetical only if
+        # its words appear bare elsewhere in their input. Run per segment, that
+        # test would only see the segment, and "(PRC)" would be spoken in a
+        # segment that lacks a bare "PRC". Stripping once here, on the whole
+        # answer, gives the parity decision; the per-segment pass then finds
+        # nothing more to strip that parity kept.
+        prepped, _ = shared_domain_frontend.paren_conditional_strip(prepped)
     return [(_verbalize_segment(seg, lang, initialism_set), pause) for seg, pause in _split_guarded(prepped, lang)]
 
 
