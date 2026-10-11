@@ -14,6 +14,9 @@
 #   CMAKE         cmake binary (default: cmake on PATH)
 #   NVCC          CUDA compiler for the CUDA build (default: nvcc on PATH, else
 #                 /usr/local/cuda/bin/nvcc)
+#   QWENTTS_CMAKE_ARGS
+#                 extra cmake arguments, space separated, e.g. -DGGML_NATIVE=OFF
+#                 for a binary that must run on other CPUs (docker/Dockerfile.gpu)
 #
 # The CUDA build goes to $QWENTTS_DIR/build, the path qwentts.cpp's own
 # tests/debug-clone-cossim.py expects. The CPU check goes to
@@ -82,6 +85,7 @@ echo "git:            $(first_line git --version)"
 echo "cmake:          $(first_line "$CMAKE" --version)"
 echo "c++:            $(first_line c++ --version)"
 echo "cpus:           $(getconf _NPROCESSORS_ONLN)"
+echo "extra cmake:    ${QWENTTS_CMAKE_ARGS:-(none)}"
 
 NVCC_PATH=""
 if [[ "$MODE" == "cuda" ]]; then
@@ -157,6 +161,10 @@ if [[ "$MODE" == "cuda" ]]; then
 else
     CMAKE_ARGS+=(-DGGML_CUDA=OFF)
 fi
+if [[ -n "${QWENTTS_CMAKE_ARGS:-}" ]]; then
+    read -r -a EXTRA_CMAKE <<<"$QWENTTS_CMAKE_ARGS"
+    CMAKE_ARGS+=("${EXTRA_CMAKE[@]}")
+fi
 echo "[build_qwentts] $CMAKE ${CMAKE_ARGS[*]}"
 "$CMAKE" "${CMAKE_ARGS[@]}"
 "$CMAKE" --build "$BUILD_DIR" --config Release -j "$(getconf _NPROCESSORS_ONLN)" --target "${TARGETS[@]}"
@@ -183,6 +191,7 @@ INFO="$BUILD_DIR/BUILD_INFO.txt"
         echo "cuda arch:      $CUDA_ARCH"
     fi
     echo "binary version: $VERSION_LINE (upstream hash; the patches below are applied on top)"
+    echo "extra cmake:    ${QWENTTS_CMAKE_ARGS:-(none)}"
     echo "qwentts commit: $QWENTTS_COMMIT"
     echo "ggml commit:    $GOT_GGML"
     echo "patches (sha256):"

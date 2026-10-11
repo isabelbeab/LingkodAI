@@ -355,7 +355,227 @@ Qwen3-TTS generation (no seed is set, in the source notebook or the port),
 not a frontend problem. The evaluated DS7 run may have hit it too: 8 of its
 2,235 rows (6 eng, 2 ceb) have a round-trip WER above 2, meaning the
 transcribed audio had far more words than the text, which fits this failure
-but was not confirmed by listening. Known issue, not fixed: a guard that treats a
+but was not confirmed by listening. (Corrected 2026-10-11: those rows' audio
+has normal length; see "DS7 rows with round-trip WER above 2: correction".) Known issue, not fixed: a guard that treats a
 segment reaching the cap as a TTS failure (text-only turn, the existing
 designed fallback) is a candidate follow-up, but it is a deviation from the
 source notebook and needs a GPU test.
+
+---
+
+## 2026-10-11 -- Stage 7 on qwentts.cpp (branch `tts-cpp`)
+
+**Issue:** Stage 7 takes about 2.3 times the answer's audio length to
+synthesize on an A100 (DS6 synthesis notebook, batch 1: RTF 2.30 ceb over 742
+rows, 2.39 fil). A median answer, about 20 s of audio, waits about 48 s for
+TTS alone, too slow for live use.
+
+**Reason:** qwentts.cpp, a GGML port of the same Qwen3-TTS model, ran at RTF
+0.34 to 0.41 on a 6 GB laptop GPU with Q8_0 weights in an earlier trial, and
+its own test logs show 0.28 (F32) and 0.22 (Q8_0) on a workstation GPU. It
+runs as a separate process: that trial hit a CUDA out-of-memory error that
+segfaulted, and a crash in a child process can become a text-only turn
+instead of a dead conversation.
+
+**Decision:** A second Stage 7 backend, `src/tts_cpp.py`, selected with
+`--tts-backend cpp`; the default stays `hf` (`src/tts.py`, the evaluated
+path). `tts-server` runs on a free localhost port; the three padded
+reference voices are registered once per server start, resampled to 24 kHz
+with librosa as qwen-tts does and sent as float WAV. Language is `english`
+for eng and omitted (auto) for fil and ceb, matching `language=None`
+upstream. Sampling defaults are the same as qwen-tts (temperature 0.9, top-k
+50, top-p 1.0, repetition penalty 1.05, the same for the sub-talker). Known
+differences that remain: the server returns 16-bit WAV where qwen-tts returns
+float; qwentts.cpp trims the reference to whole 1920-sample codec frames
+before encoding it (under 80 ms of the padding silence). Weights:
+`Serveurperso/Qwen3-TTS-GGUF` at revision `b7ee2e8`, F32 by default and Q8_0
+as an extra benchmark arm, each file checked against its SHA-256
+(`scripts/fetch_qwentts_weights.py`). The server is built from source
+(`scripts/build_qwentts.sh`) because upstream's prebuilt images cannot carry
+the two patches below. Turn JSON now records `tts_wall_sec` and `tts_rtf`
+for both backends. Built and tested on CPU with a fake server only; not yet
+run on a GPU.
+
+---
+
+## 2026-10-11 -- qwentts.cpp patch: ICL prompt layout
+
+**Issue:** qwentts.cpp builds the voice-clone (ICL) prompt like upstream's
+`generate_icl_prompt` with `non_streaming_mode=False`: text and reference
+codes aligned and summed. `src/tts.py` and the DS6/DS7 synthesis use
+`non_streaming_mode=True`: the whole text over `codec_pad`, then the
+reference codes over `tts_pad`. A different prompt conditions the model
+differently.
+
+**Reason:** Parity with the evaluated path is the point of arm B, and the
+`True` layout is a small, separate branch of the same function.
+
+**Decision:** `patches/qwentts/0001-icl-non-streaming-layout.patch` adds the
+`True` layout behind `--icl-non-streaming` (off by default, so upstream
+behaviour is unchanged) and the matching option on qwentts.cpp's own cossim
+harness. `src/tts_cpp.py` always passes the flag and refuses a server whose
+startup log does not confirm it. `scripts/validate_qwentts_patch.py` checks
+the layout against qwen-tts on Colab (prompt ids exact, embedding shapes
+equal, text rows at cosine 0.9999 or more, prefill logits at 0.999 or more);
+not yet run.
+
+---
+
+## 2026-10-11 -- qwentts.cpp patch: talker KV length
+
+**Issue:** qwentts.cpp's talker KV cache is fixed at 4096 positions. Stage 7
+allows `max_new_tokens=4096` frames on top of the ICL prompt, so a long
+generation would overflow the cache and fail partway through.
+
+**Reason:** The cache must hold the prompt plus every generated frame.
+
+**Decision:** `patches/qwentts/0002-talker-kv-length.patch` adds
+`--talker-ctx` and refuses, before any compute, a request whose prompt plus
+`max_new_tokens` cannot fit (HTTP 400 with both numbers).
+`src/tts_cpp.py` uses 7168 positions: 4096 frames plus 3072 for the prompt,
+since parity mode sends a whole fil or eng answer as one prompt and the
+longest DS6 answer (`fil_01_mt_328`) has 3,362 verbalized characters. The
+cache is f32, about 224 KiB per position, so 7168 positions take 1.5 GiB.
+
+---
+
+## 2026-10-11 -- Segmented mode: fil and eng split before verbalizing
+
+**Issue:** Only ceb answers are split into segments; fil and eng answers are
+synthesized whole (up to 327 s of audio in DS7). Nothing can play before the
+whole answer is done, and a runaway anywhere costs the whole answer.
+
+**Reason:** `ceb_segmentation.split_for_synthesis` (140 characters, pauses
+0.20 / 0.45 / 0.60 s) already serves ceb and works on any language. Splitting
+before verbalizing, ceb's own order, keeps list numbers attached to their
+item; splitting after verbalizing turned them into tiny spoken segments
+("one." alone; 96 eng segments under 10 characters against 30).
+
+**Decision:** In `segmented` mode (arm C) every language is split first, with
+the vendored file unedited, then each segment is verbalized. A list marker at
+the start of a block is spoken with the language's own reading: ceb's
+`CEB_ORDINALS` as before, fil's verbalizer's own ordinal table, and for eng
+the eng verbalizer's reading of the number ("one, ..."). For fil and eng,
+`paren_conditional_strip` runs once on the whole answer before the split: it
+drops a parenthetical only when its words appear bare elsewhere, and per
+segment it would have kept, for example, "(PRC)" that parity drops. Checked
+on all DS6 answers against DS6's `verbalized_text`: the words differ only by
+"." against "," after list ordinals, markdown `**` removed by the splitter's
+own cleanup, numbers before a capitalised sentence no longer misread as list
+ordinals by the fil verbalizer ("Dokumento ng Kandidato 2. Samakatuwid" now
+reads "two", where parity reads "pangalawa"), and the "No." readings in the
+next entry. Some clauses have no split points; the longest verbalized
+segments are 813 ceb, 1,261 fil and 777 eng characters, left whole and
+covered by the length cap. `parity` mode (arm B) and the `hf` backend are
+unchanged.
+
+---
+
+## 2026-10-11 -- Segmented mode: "No." kept with its number
+
+**Issue:** `split_for_synthesis` ends a sentence at "No.", so "PRB Resolution
+No." and "02-2025." become separate segments with a 0.45 s pause between
+them. In DS6 that happens 35 times in ceb answers, 34 in eng and 21 in fil;
+"(s. 2008)" splits the same way 4 times and "A.Y. 2018" 3 times.
+
+**Reason:** The number belongs to the abbreviation; ceb's evaluated audio
+already has these pauses, so the fix applies to arm C only.
+
+**Decision:** Approved 2026-10-11 for "No." and "R.A."; applied as well to
+"Nos.", "(s." and "A.Y.", the same failure. A guard in `src/tts_cpp.py` (the
+vendored splitter stays unedited) replaces the space after these
+abbreviations with a placeholder while the splitter runs, when a number, or
+"No." and a number, follows. On DS6 it removes all 98 such splits and
+changes no word. Because the ceb verbalizer now sees "No." and the number
+together, it reads some of those numbers through its own "No." rule, for
+example "2019-1146" after "Resolution No."; worth a listen.
+
+---
+
+## 2026-10-11 -- Segmented mode: length cap, retry, text-only turn
+
+**Issue:** The 2026-09-29 known issue: a segment occasionally never produces a
+stop token and runs to `max_new_tokens=4096` (4096 frames at 12.5 per second,
+327.7 s of garbled audio). In DS7, `ceb_01_mt_185` ran 327.6 s, 3.08 times the expected length,
+UTMOS 1.54.
+
+**Reason:** Audio length is predictable from verbalized text (DS6:
+correlation 0.998 ceb, 0.995 fil, 0.94 eng; about 14.9 characters per second,
+so 0.84 frames per character; actual over expected has a p99 of 1.2). A cap
+at twice the expected length catches `ceb_01_mt_185` with no false positives
+on the other 2,234 rows. Runaways are random per generation (Colab's
+`ceb_01_mt_05` runaway was a short segment), so a new seed is a fair retry.
+
+**Decision:** In `segmented` mode each segment's `max_new_tokens` is
+`ceil(2 x 0.84 x characters) + 25`, at most 4096. A segment that reaches its
+cap, or returns no audio, is retried once with a new seed; a second failure
+makes the whole turn text-only, the existing designed fallback. A segment is
+only played after it ends under its cap, so a runaway is never heard. `parity`
+mode keeps `max_new_tokens=4096` and only records cap hits. Its retry at 2048
+fires on an out-of-memory error from the server; a GPU out-of-memory in
+qwentts.cpp crashes the server instead, which gives a text-only turn, and the
+server restarts before the next turn.
+
+---
+
+## 2026-10-11 -- Seeds for the qwentts.cpp backend
+
+**Issue:** Neither the synthesis notebook nor `src/tts.py` sets a seed, so no
+TTS run can be repeated, and a retry needs a seed different from the attempt
+it replaces.
+
+**Reason:** `tts-server` takes a seed per request.
+
+**Decision:** The cpp backend takes a base seed (`--tts-seed`; drawn and
+recorded when omitted). Each request's seed derives from the base seed, the
+turn id, the segment index and the attempt, and every one is recorded in the
+turn JSON. This is meant to repeat a run on the same build and GPU; not yet
+checked on a GPU. The `hf` backend stays unseeded, as evaluated.
+
+---
+
+## 2026-10-11 -- DS7 rows with round-trip WER above 2: correction
+
+**Issue:** The 2026-09-29 entry suggested the 8 DS7 rows with round-trip WER
+above 2 fit the runaway failure.
+
+**Reason:** Their audio has normal length: 0.85 to 1.15 times the length
+expected from their verbalized text (DS6 average, 15.1 characters per
+second), where a runaway runs three times or more. Their judge transcripts
+have 2.8 to 7 times the reference's words, and the four inspected
+(`ceb_01_mt_85`, `ceb_01_mt_697`, `eng_01_mt_157`, `eng_01_mt_734`) repeat a
+phrase until they stop ("as specified as specified ..."): the Whisper judge
+looped, not the synthesized audio.
+
+**Decision:** The 8 rows are judge failures, not TTS runaways. DS7's one
+known runaway is `ceb_01_mt_185`, whose round-trip WER is only 0.68 because
+the judge stops transcribing long clips early. Not confirmed by listening.
+The 2026-09-29 sentence is marked with a pointer here.
+
+---
+
+## 2026-10-11 -- Stage 7 A/B scoring
+
+**Issue:** Comparing the backends needs the DS6/DS7 judge, and the DS6/DS7
+scoring scripts exist only on JOJIE.
+
+**Reason:** The DS2/DS5 versions of the judge scripts and the DS6/DS7 result
+notebooks document the same setup, and `DS6_augmented.xlsx` stores
+`reference_norm`, `hyp_norm` and `tts_rt_wer` per row to check a port
+against.
+
+**Decision:** `scripts/tts_ab.py` synthesizes the same DS6
+`rag_answer_native` texts in their `final_lang` with every arm, so only
+Stage 7 differs. Judge (decided 2026-10-11): `lingkodai/lingkodai-whisper-{lang}`
+(not verified to be the same weights as JOJIE's `best_checkpoints/{lang}`),
+base whisper-medium processor, fp16, batch 8, `max_length=440`, the same
+forced decoder ids, no long-form chunking. The judge stops transcribing long
+clips early, so WER counts only rows whose verbalized text has at most 75
+words, the DS6/DS7 error analysis cutoff. The hypothesis is normalized as
+DS6's `hyp_norm` (`scoring_normalize`, plus `eval_side_normalize` for eng),
+which reproduces DS6 on 2,235 of 2,235 rows, and scored against DS6's stored
+`reference_norm`, because the JOJIE scorer's reference de-lexicalization
+(reversing respellings such as "sertifayd") is not in the vendored files;
+`jiwer.wer` on the stored columns reproduces `tts_rt_wer` exactly. Arm C's
+text differs from that reference only as listed in the splitting entry above.
+UTMOS22 via `utmos-pytorch==0.1.0` `UTMOSScoreTorch`, as DS6 was scored.

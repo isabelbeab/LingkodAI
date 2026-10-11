@@ -24,7 +24,38 @@
 # Then add ASR_CEB/FIL/ENG and TTS_REF_DIR, as printed (paths under /data/hf),
 # to .env. The patched ASR copies symlink into the HF cache on the same
 # volume, so they only resolve with that volume mounted.
+#
+# Branch tts-cpp: the image also carries the qwentts.cpp tts-server for the
+# `--tts-backend cpp` Stage 7 (README, "Stage 7 on qwentts.cpp"), built in the
+# first stage below and import-checked (its shared libraries resolve) only.
+# Its GGUF weights are not baked in either:
+#   docker run --rm --env-file .env -v lingkodai-hf:/data/hf lingkodai-gpu \
+#       python scripts/fetch_qwentts_weights.py --out /data/hf/gguf
+# then QWENTTS_TALKER_GGUF and QWENTTS_CODEC_GGUF in .env (see .env.example).
 
+# --- Stage 1: qwentts.cpp tts-server --------------------------------------
+# Built from source because upstream's prebuilt images cannot carry
+# patches/qwentts/. Ubuntu 22.04: its glibc (2.35) is older than the runtime
+# image's Debian bookworm (2.36), so the binary runs there. CUDA 12.6 matches
+# the cu126 torch wheels, whose CUDA libraries the binary uses at run time.
+# GGML_NATIVE=OFF: no -march=native, so the binary runs on any x86-64 CPU.
+# The CUDA driver stub stands in for libcuda.so.1 only while the build
+# script runs the binaries' usage and C ABI checks (no GPU at build time).
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS qwentts
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git cmake build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY scripts/build_qwentts.sh scripts/
+COPY patches/qwentts/ patches/qwentts/
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH} \
+       QWENTTS_DIR=/opt/qwentts.cpp QWENTTS_CMAKE_ARGS="-DGGML_NATIVE=OFF" \
+       bash scripts/build_qwentts.sh
+
+# --- Stage 2: the pipeline --------------------------------------------------
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -37,8 +68,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # ffmpeg: src/audio.py shells out to it to resample any input to 16 kHz mono.
 # sox: qwen_tts warns on import without it.
 # git: some HF model repos resolve through git during download.
+# libgomp1, libstdc++6: runtime libraries of the qwentts.cpp binaries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg sox git \
+        ffmpeg sox git libgomp1 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -70,12 +102,25 @@ COPY data/init_set_ds6.json ./data/init_set_ds6.json
 # by bare top-level name and must not be edited.
 ENV PYTHONPATH=/app:/app/src/tts_frontend
 
+# qwentts.cpp build, at the path it was built in: the binaries find their
+# ggml libraries through an absolute RUNPATH. libcudart and libcublas come
+# from the cu126 torch wheels' nvidia packages; libcuda.so.1 is the host
+# driver, mounted at run time by the NVIDIA container toolkit.
+COPY --from=qwentts /opt/qwentts.cpp/build /opt/qwentts.cpp/build
+ENV QWENTTS_SERVER_BIN=/opt/qwentts.cpp/build/tts-server \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib
+RUN missing="$(ldd "$QWENTTS_SERVER_BIN" | grep 'not found' | grep -v 'libcuda\.so\.1' || true)"; \
+    if [ -n "$missing" ]; then echo "tts-server is missing libraries:"; echo "$missing"; exit 1; fi; \
+    cat /opt/qwentts.cpp/build/BUILD_INFO.txt; \
+    echo "tts-server libraries resolve (libcuda.so.1 comes from the host driver at run time)"
+
 # Import check only. This runs at build time on a machine with no GPU, so it
 # must not touch CUDA or load any weights.
 RUN python -c "import torch, transformers; \
 import shared_domain_frontend, ceb_full_pipeline; \
 from lingkod_tts_utils import prep_tts_text; \
 import fasttext; \
+import src.tts_cpp; \
 print('torch', torch.__version__, '| transformers', transformers.__version__); \
 print('imports OK (no GPU touched)')"
 

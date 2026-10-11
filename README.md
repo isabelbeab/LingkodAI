@@ -91,6 +91,51 @@ routing overrode audio LID), one `turn_N.json` per turn (transcript, English
 query, English answer, native answer, chunk ids, and whether each stage
 succeeded), and one `turn_N.wav` per turn where synthesis succeeded.
 
+## Stage 7 on qwentts.cpp (branch `tts-cpp`)
+
+This branch adds a second Stage 7 backend: the same Qwen3-TTS-12Hz-1.7B-Base
+voice cloning, run by a patched
+[qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) `tts-server`
+(GGML, in its own process) instead of qwen-tts in PyTorch. The reason is
+speed: qwen-tts fp32 takes about 2.3 times the audio length to synthesize on
+an A100 (the DS6 synthesis notebook's own timing), while qwentts.cpp ran at
+0.34 to 0.41 times on a 6 GB laptop GPU in an earlier trial. The default
+backend is still `hf`, the evaluated path. **Status: built and tested on CPU
+with fakes only; the A/B below has not been run on a GPU yet.**
+
+- `scripts/build_qwentts.sh` builds `tts-server` from source at a pinned
+  commit with the two patches in `patches/qwentts/` (see its README): the
+  ICL prompt in the `non_streaming_mode=True` layout `src/tts.py` uses, and a
+  talker KV cache long enough for 4096 frames plus the prompt.
+- `scripts/fetch_qwentts_weights.py` downloads the GGUF weights (F32 by
+  default, Q8_0 as a benchmark) at a pinned revision and checks their SHA-256.
+- `src/tts_cpp.py` has the same interface as `src/tts.py` and two modes.
+  `parity` keeps `src/tts.py`'s text path and settings. `segmented` splits
+  every language into sentence-sized segments before verbalizing (ceb
+  already is), caps each segment at twice the length its text predicts,
+  retries a segment that hits the cap once with a new seed, and makes the
+  turn text-only if it fails again. It also simulates sentence-level
+  play-ahead: time to first audio and any stalls.
+
+```bash
+python scripts/run_conversation.py --audio TURN1.wav --out outputs/RUN_NAME \
+    --tts-backend cpp --tts-mode segmented --tts-seed 1234
+```
+
+This needs `QWENTTS_TALKER_GGUF` and `QWENTTS_CODEC_GGUF` (see
+`.env.example`) besides the usual setup. The cpp backend also writes one
+`turn_N_segKK.wav` per segment, `timeline.json` (play-ahead per turn), the
+server's settings in `manifest.json` and `tts-server.log`. Every turn JSON,
+either backend, now records `tts_wall_sec` and `tts_rtf`.
+
+`notebooks/tts_cpp_ab_colab.ipynb`
+([open in Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/tts-cpp/notebooks/tts_cpp_ab_colab.ipynb))
+validates the prompt patch against qwen-tts, then runs `scripts/tts_ab.py`:
+the same DS6 answers through `src/tts.py` (arm A), parity (B), segmented (C)
+and segmented on Q8_0, scored with the DS6/DS7 judge and UTMOS22. Every way
+this branch departs from the evaluated pipeline is in `CHANGELOG.md`, under
+2026-10-11.
+
 ## Running the CPU demo locally
 
 ```bash
@@ -127,7 +172,9 @@ seven models) and download to `/data/hf` on first boot. The two one-time
 steps under Setting up the GPU pipeline below still apply inside the
 container: run them with their `--out` under the mounted `/data` volume so
 they persist across runs. `docker/Dockerfile.gpu`'s header shows the
-commands.
+commands. On branch `tts-cpp` the build also compiles qwentts.cpp's
+`tts-server` in a first stage (a CUDA 12.6 devel image; the CUDA kernels
+take a while) and checks that its libraries resolve in the final image.
 
 ## Environment
 
@@ -267,7 +314,8 @@ Known issue: Qwen3-TTS occasionally fails to stop on one segment and runs
 to its `max_new_tokens` cap (4096 tokens, about 5.7 minutes of garbled
 audio). The turn's text answer is unaffected. It happened once in 24 turns
 on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
-2026-09-29.
+2026-09-29. On branch `tts-cpp`, the qwentts.cpp backend's `segmented` mode
+caps and retries such a segment (see "Stage 7 on qwentts.cpp" above).
 
 ## Contributing
 
