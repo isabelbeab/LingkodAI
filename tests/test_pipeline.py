@@ -242,3 +242,56 @@ def test_to_json_dict_excludes_audio_array():
     assert "audio_out" not in d
     assert d["has_audio"] is True
     assert d["audio_out_sr"] == 24000
+
+
+# --- Stage 7 backend selection (branch tts-cpp) -----------------------------
+
+
+class FakeCppTTSResult(FakeTTSResult):
+    def __init__(self, id, lang):
+        super().__init__(id, lang)
+        self.segments = [{"index": 0, "text": "seg", "frames": 5, "cap": 30}]
+        self.timeline = {"ttfa_s": 0.2, "n_stalls": 0, "total_stall_s": 0.0}
+        self.segment_audio = [np.zeros(10)]
+
+
+class FakeCppBundle(FakeUnloadable):
+    def __init__(self, **options):
+        super().__init__()
+        self.options = options
+        self.info = {"mode": options.get("mode"), "base_seed": 7}
+
+
+def test_run_staged_cpp_backend_records_segments_and_timeline(monkeypatch):
+    import json
+
+    from src import tts_cpp
+
+    bundles = []
+    monkeypatch.setattr(tts_cpp, "load", lambda **kw: bundles.append(FakeCppBundle(**kw)) or bundles[-1])
+    monkeypatch.setattr(tts_cpp, "synthesize_turn", lambda b, id, text, lang, s: FakeCppTTSResult(id, lang))
+    monkeypatch.setattr(pipeline.tts, "load", lambda: pytest.fail("the hf backend must not load"))
+
+    result = pipeline.run_staged(["a.wav"], init_set=set(), tts_backend="cpp", tts_options={"mode": "segmented"})
+
+    assert bundles[0].options == {"mode": "segmented"} and bundles[0].unloaded
+    assert result.tts_info == {"mode": "segmented", "base_seed": 7}
+    t = result.turns[0]
+    assert t.tts_backend == "cpp" and t.tts_rtf == 0.1 and t.tts_wall_sec == 0.1
+    assert t.tts_segments[0]["frames"] == 5 and t.tts_timeline["ttfa_s"] == 0.2
+    d = t.to_json_dict()
+    assert "tts_segment_audio" not in d and "audio_out" not in d
+    json.dumps(d)
+
+
+def test_run_staged_hf_backend_records_rtf_but_no_segments():
+    t = pipeline.run_staged(["a.wav"], init_set=set()).turns[0]
+    assert t.tts_backend == "hf" and t.tts_rtf == 0.1
+    assert t.tts_segments is None and t.tts_timeline is None and t.tts_segment_audio is None
+
+
+def test_run_staged_rejects_bad_tts_backend_arguments():
+    with pytest.raises(ValueError, match="Unknown tts_backend"):
+        pipeline.run_staged(["a.wav"], init_set=set(), tts_backend="onnx")
+    with pytest.raises(ValueError, match="cpp backend only"):
+        pipeline.run_staged(["a.wav"], init_set=set(), tts_options={"mode": "parity"})

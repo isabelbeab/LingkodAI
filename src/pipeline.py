@@ -23,6 +23,11 @@ No silent fallbacks. The only designed fallbacks anywhere in this pipeline
 are RAG's no-match message (src/rag.py) and TTS's text-only turn
 (src/tts.py's synthesize_turn). A failed MT stage has no designed fallback,
 so run_staged raises rather than guessing what to feed the next stage.
+
+Stage 7 has two backends (branch tts-cpp): `hf`, the evaluated qwen-tts path
+in src/tts.py (default), and `cpp`, src/tts_cpp.py on a patched qwentts.cpp
+tts-server, in its `parity` or `segmented` mode. Both share the text-only
+turn contract.
 """
 
 from __future__ import annotations
@@ -33,6 +38,8 @@ import numpy as np
 import torch
 
 from . import asr, audio, lid_audio, lid_text, mt, rag, routing, tts
+
+TTS_BACKENDS = ("hf", "cpp")
 
 
 def _print_gpu_mem(label: str) -> None:
@@ -90,11 +97,19 @@ class TurnRecord:
     audio_out_sr: int | None = None
     tts_ok: bool | None = None
     tts_failure_reason: str | None = None
+    tts_backend: str | None = None
+    tts_wall_sec: float | None = None
+    tts_rtf: float | None = None
+    # cpp backend only: per-segment records (text sent, frames, cap, seeds,
+    # retries), the simulated play-ahead timeline, and per-segment audio.
+    tts_segments: list[dict] | None = None
+    tts_timeline: dict | None = None
+    tts_segment_audio: list[np.ndarray] | None = None
 
     def to_json_dict(self) -> dict:
-        """Everything except the raw audio array, which the caller writes to
-        its own WAV file instead of embedding in JSON."""
-        d = {k: v for k, v in self.__dict__.items() if k not in ("audio_out",)}
+        """Everything except the raw audio arrays, which the caller writes to
+        their own WAV files instead of embedding in JSON."""
+        d = {k: v for k, v in self.__dict__.items() if k not in ("audio_out", "tts_segment_audio")}
         d["has_audio"] = self.audio_out is not None
         return d
 
@@ -105,6 +120,8 @@ class ConversationResult:
 
     turns: list[TurnRecord]
     routing: routing.ConversationRouting
+    # cpp backend only: server command, paths, base seed, timings, restarts.
+    tts_info: dict | None = None
 
 
 def run_staged(
@@ -112,14 +129,24 @@ def run_staged(
     init_set: set[str],
     *,
     rag_data_dir=None,
+    tts_backend: str = "hf",
+    tts_options: dict | None = None,
 ) -> ConversationResult:
     """Run one scripted conversation through all seven stages, phase-major.
 
     init_set is the frozen TTS initialism set (see src/tts.load_init_set);
     never derive it from the conversation's own answers.
+
+    tts_backend picks Stage 7: "hf" (src/tts.py) or "cpp" (src/tts_cpp.py).
+    tts_options are keyword arguments for tts_cpp.load (mode, seed, paths,
+    talker_ctx, log_dir, ...), cpp only.
     """
     if not audio_paths:
         raise ValueError("audio_paths is empty; a conversation needs at least one turn")
+    if tts_backend not in TTS_BACKENDS:
+        raise ValueError(f"Unknown tts_backend {tts_backend!r}, expected one of {TTS_BACKENDS}")
+    if tts_backend == "hf" and tts_options:
+        raise ValueError(f"tts_options apply to the cpp backend only, got {sorted(tts_options)}")
 
     turns = [TurnRecord(turn_idx=i, audio_path=p) for i, p in enumerate(audio_paths)]
     loaded_audio = [audio.load_audio(t.audio_path) for t in turns]
@@ -210,10 +237,17 @@ def run_staged(
         t.mt_out_failure_reason = r.failure_reason
 
     # --- Phase 5: TTS, all turns ------------------------------------------
-    print("[phase 5/5] TTS")
+    print(f"[phase 5/5] TTS ({tts_backend})")
     _print_gpu_mem("start of phase 5")
 
-    tts_bundle = tts.load()
+    if tts_backend == "cpp":
+        from . import tts_cpp
+
+        tts_mod = tts_cpp
+        tts_bundle = tts_cpp.load(**(tts_options or {}))
+    else:
+        tts_mod = tts
+        tts_bundle = tts.load()
     try:
         for t in turns:
             if not t.mt_out_ok:
@@ -221,14 +255,22 @@ def run_staged(
                     f"turn {t.turn_idx}: stage 6 (MT out) failed ({t.mt_out_failure_reason}); "
                     "no designed fallback for a failed translation, see module docstring"
                 )
-            result = tts.synthesize_turn(
+            result = tts_mod.synthesize_turn(
                 tts_bundle, t.turn_idx, t.native_answer, conv_routing.final_lang, init_set
             )
             t.audio_out = result.audio
             t.audio_out_sr = result.sr
             t.tts_ok = result.ok
             t.tts_failure_reason = result.failure_reason
+            t.tts_backend = tts_backend
+            t.tts_wall_sec = result.wall_sec
+            t.tts_rtf = result.rtf
+            if tts_backend == "cpp":
+                t.tts_segments = result.segments
+                t.tts_timeline = result.timeline
+                t.tts_segment_audio = result.segment_audio or None
     finally:
         tts_bundle.unload()
+    tts_info = dict(tts_bundle.info) if tts_backend == "cpp" else None
 
-    return ConversationResult(turns=turns, routing=conv_routing)
+    return ConversationResult(turns=turns, routing=conv_routing, tts_info=tts_info)
