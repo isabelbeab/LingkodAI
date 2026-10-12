@@ -11,6 +11,8 @@ optional). Each "*_on" key is a substring of the request input:
 
   frames_per_char   float, default 0.84
   sec_per_frame     float, sleep per generated frame (simulated speed)
+  lead_silence_frames  int, the first n frames of every reply are digital
+                    silence (the frame count is unchanged)
   runaway_on        {substring: n}  the first n requests with that substring
                     run to max_new_tokens; use n = -1 for every request
   zero_on           {substring: n}  the first n such requests return 0 frames
@@ -79,13 +81,14 @@ def _wav_info(data: bytes) -> dict:
 _FRAME_PCM = b"".join(struct.pack("<h", int(800 * math.sin(i / 20.0))) for i in range(HOP))
 
 
-def _wav_bytes(n_frames: int) -> bytes:
+def _wav_bytes(n_frames: int, silent_frames: int = 0) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SR)
-        w.writeframes(_FRAME_PCM * n_frames)
+        silent = min(silent_frames, n_frames)
+        w.writeframes(b"\x00\x00" * HOP * silent + _FRAME_PCM * (n_frames - silent))
     return buf.getvalue()
 
 
@@ -161,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             frames = min(max_new, max(1, round(b.get("frames_per_char", 0.84) * len(text))))
         time.sleep(b.get("sec_per_frame", 0.0) * frames)
-        body = _wav_bytes(frames)
+        body = _wav_bytes(frames, b.get("lead_silence_frames", 0))
         self.send_response(200)
         self.send_header("Content-Type", "audio/wav")
         self.send_header("Content-Length", str(len(body)))

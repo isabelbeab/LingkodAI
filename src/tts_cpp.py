@@ -45,6 +45,12 @@ Frames are counted from the returned WAV: the buffered path decodes exactly
 1920 samples (one 12.5 Hz codec frame) per generated frame, so a segment hit
 its cap when frames == max_new_tokens.
 
+Every segment's leading silence is trimmed to 20 ms before the segments are
+joined (trim_lead_in), in both modes, unless load(trim_lead_in=False).
+qwentts.cpp starts each generation with silence qwen-tts does not produce;
+ceb is always split, so it lengthened every pause. This changes the audio,
+not the text path: a deviation from src/tts.py (CHANGELOG.md, 2026-10-12).
+
 Seeds are explicit and recorded. Each request's seed derives from the
 bundle's base seed, the turn id, the segment index and the attempt, so a run
 is reproducible from the base seed alone.
@@ -110,6 +116,17 @@ HOP_SAMPLES = 1920  # one 12.5 Hz codec frame at 24 kHz
 FRAMES_PER_CHAR = 0.84
 CAP_MULTIPLIER = 2.0
 CAP_SLACK_FRAMES = 25
+
+# Lead-in trim (both modes). In A/B run1 (L4), the silence before the first
+# word had a median of 0.13 to 0.22 s in arm B against 0.00 to 0.04 s in arm
+# A. That is once per answer for fil and eng, but ceb is split, so it landed
+# in every pause: median pause 0.60 s in B against 0.46 s in A. Cutting each
+# B segment to 20 ms before its first 10 ms frame at or above 1e-3 RMS (about
+# -60 dBFS) gave 0.48 s on the same audio. Why the server adds it is not
+# verified.
+LEAD_IN_FRAME_S = 0.01
+LEAD_IN_RMS = 1e-3
+LEAD_IN_KEEP_S = 0.02
 
 # Talker KV positions: 4096 generated frames plus room for the prompt prefix.
 # The longest DS6 answer (fil_01_mt_328, 3,362 verbalized chars) goes out as
@@ -220,6 +237,22 @@ def request_seed(base_seed: int, turn_key: object, seg_idx: int, attempt: int) -
     call order, so one recorded base seed reproduces a whole run."""
     ss = np.random.SeedSequence([base_seed, zlib.crc32(str(turn_key).encode("utf-8")), seg_idx, attempt])
     return int(ss.generate_state(1, dtype=np.uint32)[0] >> 1)
+
+
+def trim_lead_in(wav: np.ndarray, sr: int = SAMPLE_RATE) -> tuple[np.ndarray, float]:
+    """Drop a segment's silence before its first sound, keeping LEAD_IN_KEEP_S
+    of it. Returns (trimmed, seconds removed). A segment with no frame at or
+    above LEAD_IN_RMS is returned unchanged."""
+    hop = int(LEAD_IN_FRAME_S * sr)
+    n = len(wav) // hop
+    if n == 0:
+        return wav, 0.0
+    rms = np.sqrt(np.mean(np.square(wav[: n * hop].reshape(n, hop), dtype=np.float64), axis=1))
+    loud = np.flatnonzero(rms >= LEAD_IN_RMS)
+    if loud.size == 0:
+        return wav, 0.0
+    cut = max(int(loud[0]) * hop - int(LEAD_IN_KEEP_S * sr), 0)
+    return wav[cut:], cut / sr
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +552,7 @@ class CppTTSBundle:
     base_seed: int
     ref_sr: int
     ref_config: dict[str, dict]
+    trim_lead_in: bool = True
     info: dict = field(default_factory=dict)
     restarts: int = 0
 
@@ -559,6 +593,7 @@ def load(
     codec_gguf: str | Path | None = None,
     talker_ctx: int = DEFAULT_TALKER_CTX,
     seed: int | None = None,
+    trim_lead_in: bool = True,
     extra_server_args: tuple[str, ...] = (),
     log_dir: str | Path | None = None,
     startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
@@ -570,6 +605,7 @@ def load(
     build/qwentts.cpp/build/tts-server), QWENTTS_TALKER_GGUF,
     QWENTTS_CODEC_GGUF and TTS_REF_DIR. seed=None draws a base seed, which is
     printed and recorded; pass it back to reproduce a run.
+    trim_lead_in=False keeps each segment's leading silence, as A/B run1 did.
     """
     if mode not in MODES:
         raise ValueError(f"Unknown mode {mode!r}, expected one of {MODES}")
@@ -611,9 +647,11 @@ def load(
         base_seed=base_seed,
         ref_sr=SAMPLE_RATE,
         ref_config=ref_config,
+        trim_lead_in=bool(trim_lead_in),
         info={
             "mode": mode,
             "base_seed": base_seed,
+            "trim_lead_in": bool(trim_lead_in),
             "server_bin": str(binary),
             "talker_gguf": str(talker),
             "codec_gguf": str(codec),
@@ -624,7 +662,8 @@ def load(
         },
     )
     print("[tts_cpp] Stage 7 backend: qwentts.cpp tts-server")
-    for key in ("mode", "base_seed", "server_bin", "talker_gguf", "codec_gguf", "talker_ctx", "server_log"):
+    for key in ("mode", "base_seed", "trim_lead_in", "server_bin", "talker_gguf", "codec_gguf", "talker_ctx",
+                "server_log"):
         print(f"  {key:<12} {bundle.info[key]}")
     if bundle.info["build_info"] is None:
         print(f"  build_info   none at {build_info_path} (patched flags are still checked in the server log)")
@@ -654,9 +693,10 @@ class CppTTSResult(TTSResult):
     """TTSResult plus what the qwentts.cpp backend knows about the turn.
 
     segments holds one JSON-ready record per segment (the text sent,
-    expected frames, cap, every attempt's seed, frames and wall time), also
-    for text-only turns as far as generation got. segment_audio holds the
-    per-segment waveforms (for listening; not JSON). timeline is the
+    expected frames, cap, every attempt's seed, frames and wall time, the
+    lead-in trimmed), also for text-only turns as far as generation got.
+    segment_audio holds the per-segment waveforms as joined, lead-in trimmed
+    (for listening; not JSON). timeline is the
     simulated play-ahead (playback_timeline), None for a text-only turn.
     """
 
@@ -755,6 +795,7 @@ def synthesize_turn(
             "attempts": [],
             "frames": None,
             "cap_hit": None,
+            "lead_in_trimmed_s": None,
             "audio_s": None,
             "wall_s": None,
             "retries": None,
@@ -768,6 +809,10 @@ def synthesize_turn(
             wav = _generate_segment(bundle, id, rec, lang)
             rec["frames"] = len(wav) // HOP_SAMPLES
             rec["cap_hit"] = rec["attempts"][-1]["cap_hit"]
+            if bundle.trim_lead_in:
+                wav, rec["lead_in_trimmed_s"] = trim_lead_in(wav)
+            else:
+                rec["lead_in_trimmed_s"] = 0.0
             rec["audio_s"] = len(wav) / SAMPLE_RATE
             rec["wall_s"] = sum(a["wall_s"] or 0.0 for a in rec["attempts"])
             rec["retries"] = len(rec["attempts"]) - 1

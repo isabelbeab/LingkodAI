@@ -154,6 +154,43 @@ def test_timeline_no_stall_when_generation_outpaces_playback():
     assert tl["no_stall_start_s"] == pytest.approx(tl["ttfa_s"]) == pytest.approx(0.5)
 
 
+# --- lead-in trim ----------------------------------------------------------
+
+
+def _tone(seconds, sr=24000, amp=0.1):
+    t = np.arange(int(seconds * sr)) / sr
+    return (amp * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+
+
+def test_trim_lead_in_keeps_20_ms_before_the_first_sound():
+    wav = np.concatenate([np.zeros(int(0.30 * 24000), np.float32), _tone(0.5)])
+
+    out, cut = tts_cpp.trim_lead_in(wav)
+
+    assert cut == pytest.approx(0.28)
+    assert np.array_equal(out, wav[int(0.28 * 24000):])
+
+
+def test_trim_lead_in_treats_sound_under_the_threshold_as_silence():
+    hiss = np.full(int(0.20 * 24000), 5e-4, np.float32)  # RMS 5e-4, under 1e-3
+
+    out, cut = tts_cpp.trim_lead_in(np.concatenate([hiss, _tone(0.5)]))
+
+    assert cut == pytest.approx(0.18)
+
+
+@pytest.mark.parametrize(
+    "wav",
+    [_tone(0.5), np.concatenate([np.zeros(200, np.float32), _tone(0.5)]), np.zeros(24000, np.float32),
+     np.zeros(100, np.float32), np.zeros(0, np.float32)],
+    ids=["starts-at-once", "within-20-ms", "all-silent", "shorter-than-a-frame", "empty"],
+)
+def test_trim_lead_in_leaves_alone_audio_with_nothing_to_trim(wav):
+    out, cut = tts_cpp.trim_lead_in(wav)
+
+    assert cut == 0.0 and np.array_equal(out, wav)
+
+
 # --- fake server harness ------------------------------------------------------
 
 
@@ -423,3 +460,48 @@ def test_segmented_drops_a_parenthetical_acronym_exactly_when_parity_does():
 
     assert "(" not in seg and "(" not in par
     assert seg.split() == par.split()
+
+
+# --- lead-in trim through the server --------------------------------------
+
+# The fake answers with 3 silent frames, then its tone: 5760 samples of
+# silence, of which 20 ms (480 samples) are kept.
+LEAD_CUT = 3 * 1920 - 480
+
+
+def test_lead_in_is_trimmed_from_every_segment(fake):
+    bundle = fake.load({"lead_silence_frames": 3})
+
+    r = tts_cpp.synthesize_turn(bundle, 0, ENG_TEXT, "eng", set())
+
+    assert r.ok and bundle.info["trim_lead_in"] is True and len(r.segments) > 1
+    frames = [round(0.84 * s["chars"]) for s in r.segments]
+    assert [s["frames"] for s in r.segments] == frames  # generated frames, counted before the trim
+    assert all(s["lead_in_trimmed_s"] == pytest.approx(LEAD_CUT / 24000) for s in r.segments)
+    assert [len(a) for a in r.segment_audio] == [f * 1920 - LEAD_CUT for f in frames]
+    assert [s["audio_s"] for s in r.segments] == pytest.approx([(f * 1920 - LEAD_CUT) / 24000 for f in frames])
+    assert len(r.audio) == sum(f * 1920 - LEAD_CUT + int(s["pause_after_s"] * 24000)
+                               for f, s in zip(frames, r.segments))
+
+
+def test_parity_ceb_pause_is_the_frontend_pause_plus_20_ms(fake):
+    bundle = fake.load({"lead_silence_frames": 3}, mode="parity")
+
+    r = tts_cpp.synthesize_turn(bundle, 0, CEB_TEXT, "ceb", set())
+
+    assert r.ok and len(r.segments) == 2
+    end = len(r.segment_audio[0])
+    silence = int(r.segments[0]["pause_after_s"] * 24000) + 480
+    assert r.segments[0]["pause_after_s"] > 0
+    assert not r.audio[end:end + silence].any() and r.audio[end + silence:end + silence + 240].any()
+
+
+def test_trim_lead_in_false_keeps_the_server_audio(fake):
+    bundle = fake.load({"lead_silence_frames": 3}, mode="parity", trim_lead_in=False)
+
+    r = tts_cpp.synthesize_turn(bundle, 0, ENG_TEXT, "eng", set())
+
+    assert r.ok and bundle.info["trim_lead_in"] is False
+    assert r.segments[0]["lead_in_trimmed_s"] == 0.0
+    assert len(r.audio) == r.segments[0]["frames"] * 1920
+    assert not r.audio[:3 * 1920].any()

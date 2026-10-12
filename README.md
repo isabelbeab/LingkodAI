@@ -117,7 +117,9 @@ with fakes only; the A/B below has not been run on a GPU yet.**
   already is), caps each segment at twice the length its text predicts,
   retries a segment that hits the cap once with a new seed, and makes the
   turn text-only if it fails again. It also simulates sentence-level
-  play-ahead: time to first audio and any stalls.
+  play-ahead: time to first audio and any stalls. Both modes trim the
+  silence qwentts.cpp puts before each segment's first sound down to 20 ms,
+  which otherwise lengthened every ceb pause (`CHANGELOG.md`, 2026-10-12).
 
 ```bash
 python scripts/run_conversation.py --audio TURN1.wav --out outputs/RUN_NAME \

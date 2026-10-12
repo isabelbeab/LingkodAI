@@ -603,8 +603,12 @@ deliberate and shown in the output:
   the conversation's language on the first question.
 - `lang=` on a first question sets the language without LID, as the
   Streamlit GPU demo's language picker does.
-- Speech defaults to qwentts.cpp, segmented mode, Q8_0 weights, for GPU
-  memory headroom on an L4; provisional until the Stage 7 A/B reports.
+- Speech: qwentts.cpp in parity mode with F32 weights, arm B of the Stage 7
+  A/B, chosen by HK on 2026-10-12 after the first default (segmented, Q8_0,
+  for memory headroom on an L4). Arm B's tts-server used about 9.4 GB on
+  the L4 in run1, so with every model loaded the notebooks need an
+  estimated 21 GB (chat) and 24 GB or more (audio), past an L4's 22.5 GB
+  usable: they ask for an A100 and say what to change on an L4.
 - Models stay resident; greedy outputs are expected to match staged runs,
   not verified.
 
@@ -612,3 +616,32 @@ deliberate and shown in the output:
 of everything that shapes the binaries and restored only after passing the
 same checks as a fresh build (tested on the CPU build: build, delete,
 restore). Not yet run on a GPU.
+
+---
+
+## 2026-10-12 -- qwentts.cpp: trim each segment's silent lead-in
+
+**Issue:** Listening to A/B run1, arm B's ceb answers sounded split at
+every sentence, and its fil and eng answers did not. ceb is split in the
+evaluated path too (`full_ceb_pipeline_segments`, pauses of 0.20, 0.45 and
+0.60 s), so arm A has the same pauses, but arm B's were audibly longer.
+
+**Reason:** Every qwentts.cpp generation starts with silence that qwen-tts
+does not produce. Measured on run1's WAVs, the silence before the first word
+had a median of 0.13 to 0.22 s in arm B against 0.00 to 0.04 s in arm A,
+across all three languages. In fil and eng that happens once, before the
+answer starts. In ceb it is added to every pause: the median pause between
+ceb segments was 0.60 s in arm B against 0.46 s in arm A (90th percentile
+0.88 s against 0.68 s). Rebuilding arm B's 22 ceb answers from its own
+segment WAVs with each segment's lead-in cut to 20 ms gave 0.48 s and
+0.67 s, matching arm A; the same rebuild without the cut reproduced arm B's
+WAVs exactly. Why the server adds the silence is not verified.
+
+**Decision:** `src/tts_cpp.py` trims every segment, in both modes, to 20 ms
+before its first 10 ms frame at or above 1e-3 RMS (about -60 dBFS), before
+the segments are joined. A segment with no such frame is left as is. The
+trim changes the audio only, not the text path or the frame counts used for
+the cap. It is a deviation from `src/tts.py`'s output, so it is a load()
+option, `trim_lead_in`, on by default and recorded in the backend info.
+`trim_lead_in=False` reproduces the audio of A/B run1, which predates this
+change; run1's scores were not recomputed.
