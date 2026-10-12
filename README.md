@@ -19,6 +19,7 @@ decisions that took discussion, in the order they were made.
 
 - [Pipeline stages](#pipeline-stages) and [What ships](#what-ships)
 - [Start here: from zero to a first answer](#start-here-from-zero-to-a-first-answer)
+- [Running your own recordings (`input/` and `output/`)](#running-your-own-recordings-input-and-output)
 - [Configure: the `.env` file](#configure-the-env-file)
 - [Data and models](#data-and-models)
 - [Input and output](#input-and-output)
@@ -72,13 +73,16 @@ The grey boxes in this README are commands typed into a terminal (bash, on
 Linux or macOS; WSL on Windows). There is no installer or app to download:
 the Python scripts under `scripts/` are how the system is used. You give
 `scripts/run_conversation.py` one audio file per question, and it writes the
-answers as text (JSON) and speech (WAV).
+answers as text (JSON) and speech (WAV). To process many recordings at once,
+drop them in `input/` and run `scripts/run_folder.py`; the results appear in
+`output/` (see [Running your own recordings](#running-your-own-recordings-input-and-output)).
 
 ### Pick a route
 
 | Route | You need | Use it to |
 |---|---|---|
-| **Colab** | A Google account with a GPU runtime, and a Hugging Face token (below) | Reproduce the evaluated results with no local setup: open `notebooks/colab_golden_check.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb)), choose an L4 GPU, add the token as a Colab Secret named `HF_TOKEN`, and run the cells. The notebook clones the repo and does every step below for you |
+| **Colab: your recordings** | A Google account with a GPU runtime, and a Hugging Face token (below) | Run your own recordings with no local setup: open `notebooks/colab_run_folder.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_run_folder.ipynb)), choose an L4 GPU, add the token as a Colab Secret named `HF_TOKEN`, put recordings in the Google Drive folder `lingkodai_input`, and run the cells. Results land in the Drive folder `lingkodai_output` |
+| **Colab: evaluated results** | The same | Reproduce the evaluated results: open `notebooks/colab_golden_check.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb)) the same way and run the cells |
 | **Your own GPU machine** | Everything in "What you need" below | Run the pipeline on your own audio, or call it from other software |
 | **CPU demo only** | Docker, or Python 3.12 | Show recorded conversations and the live text frontend, with no GPU or token. See [Running the CPU demo locally](#running-the-cpu-demo-locally) |
 
@@ -149,6 +153,8 @@ answers as text (JSON) and speech (WAV).
    The first run downloads the models and takes a while; the log prints each
    phase. When it finishes, `outputs/first_run/` holds the transcript, the
    answers and the spoken answer: see [Input and output](#input-and-output).
+   For more than a few recordings, use the `input/` folder instead (next
+   section).
 
 6. **Optional: reproduce the evaluated results** with the golden check
    under [Testing](#testing).
@@ -156,6 +162,72 @@ answers as text (JSON) and speech (WAV).
 In every new terminal, run `source .venv/bin/activate` (or
 `conda activate lingkod-e2e`) and `set -a; source .env; set +a` again before
 running anything.
+
+## Running your own recordings (`input/` and `output/`)
+
+For your own recordings, no file paths to type: put them in the `input/`
+folder and run one command. After the setup in
+[Start here](#start-here-from-zero-to-a-first-answer):
+
+1. **Put recordings in `input/`.**
+   - An audio file directly in `input/` is a one-question conversation.
+   - A subfolder is a multi-turn conversation. Its files are the turns, in
+     filename order, so number them. Follow-ups are read in the light of
+     earlier answers, as in the evaluated system.
+
+   ```text
+   input/
+     renew_id.m4a            one question       -> output/renew_id/
+     exam_fee.mp3            one question       -> output/exam_fee/
+     ctc_request/            a conversation     -> output/ctc_request/
+       01_requirements.m4a
+       02_how_much.m4a
+   ```
+
+   Any format ffmpeg reads works (wav, m4a, mp3, aac, ...). Each recording
+   should be one question in Cebuano, Filipino or English.
+
+2. **Run:**
+
+   ```bash
+   python scripts/run_folder.py
+   ```
+
+   `--input DIR` and `--output DIR` choose other folders.
+
+3. **Read the results in `output/`:**
+   - `output/summary.csv`: one row per question, opens in Excel or Google
+     Sheets. Columns: conversation, turn, input file, status (`ok`,
+     `text only: <reason>`, or `failed`), detected language, transcript,
+     English question, English answer, translated answer, knowledge-base
+     chunks used, the answer's WAV file, any error, and seconds taken.
+   - `output/<name>/`: the full output of that conversation, the same files
+     as `run_conversation.py` writes ([Input and output](#input-and-output)),
+     including `turn_N.wav`, the spoken answer.
+
+Running it again only processes recordings that have no results yet, so you
+can add files to `input/` and rerun. `--force` redoes everything. If one
+recording fails, the others still run, the summary shows the error, and the
+command exits with an error code.
+
+Each conversation loads the models again (the pipeline frees the GPU
+between stages so it fits on an 11 GB card), so every conversation adds
+model-loading time. Questions that belong together are faster as one
+subfolder.
+
+Both folders are gitignored, apart from `input/README.md`: recordings and
+results never go into git. The spoken answers use the cloned research
+voice (see [Running the CPU demo locally](#running-the-cpu-demo-locally)),
+so keep `output/` private.
+
+**On Colab**, `notebooks/colab_run_folder.ipynb` does the same with Google
+Drive folders: it creates `MyDrive/lingkodai_input/` and
+`MyDrive/lingkodai_output/`, you upload recordings to the first through
+drive.google.com, and the results are written straight to the second, so
+they survive the Colab session.
+
+To show the results on the CPU demo page, copy any `output/<name>/` folder
+into `demo_audio/`.
 
 ## Configure: the `.env` file
 
@@ -564,6 +636,7 @@ on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
 | Private eval assets | Every file checked against `MANIFEST.sha256` | JOJIE and Colab, 2026-09-29 | 28/28 match |
 | CPU image | Built and started; page served | Locally, 2026-09-22 and 09-28; GitHub Actions from 2026-10-12 | Works |
 | GPU image | Built; imports checked | Locally, 2026-09-22; GitHub Actions from 2026-10-12 | Builds. **Never run with a GPU inside Docker** |
+| `scripts/run_folder.py` and `notebooks/colab_run_folder.ipynb` (added 2026-10-12) | Tests with a fake pipeline: folder rules, skipping finished work, failures, the summary | Every change, GitHub Actions | Pass. **Not yet run with the real models** |
 
 What would close the last gap: one golden-check run inside the GPU image on
 a Docker host with an NVIDIA GPU, recorded in `CHANGELOG.md` like the Colab

@@ -428,3 +428,35 @@ loading it into `build_head()`.
   recorded hash instead of the deleted local copy.
 - The file stays in git history. Removing it from history would mean
   rewriting `main`'s history, and nothing requires that.
+
+---
+
+## 2026-10-12 -- Running a folder of your own recordings
+
+**Issue:** The README explained the golden check and a single
+`run_conversation.py --audio FILE` call. It had no simple way to run a batch
+of your own pre-recorded questions and find the answers, which is what a new
+user tries first.
+
+**Reason:** Typing every file path, and then opening one folder per
+conversation to read the answers, is a barrier for anyone who is not an
+engineer.
+
+**Decision:**
+- `scripts/run_folder.py` runs everything in `input/` and writes to
+  `output/`:
+  - An audio file is a one-question conversation.
+  - A subfolder is a multi-turn conversation, with its turns in filename
+    order.
+  - Each conversation gets the same output as `run_conversation.py`, plus
+    `output/summary.csv` with one row per question.
+  - Finished conversations are skipped on a rerun.
+  - A failure is recorded in the summary and does not stop the others.
+- It reuses `pipeline.run_staged` unchanged. Each conversation therefore
+  loads the models again. Loading them once for the whole folder would
+  change `src/pipeline.py`, and is left until the cost is measured on a GPU.
+- `notebooks/colab_run_folder.ipynb` does the same with the Drive folders
+  `lingkodai_input` and `lingkodai_output`.
+- `input/` (apart from its README) and `output/` are gitignored and
+  dockerignored.
+- Tested only with a fake pipeline so far; not yet run with the real models.

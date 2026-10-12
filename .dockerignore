@@ -7,6 +7,8 @@
 # Source notebooks and team material. Never belongs in a published image.
 reference/
 outputs/
+input/
+output/
 *.ipynb
 
 # Secrets.
