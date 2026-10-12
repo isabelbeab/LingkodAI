@@ -459,4 +459,22 @@ engineer.
   `lingkodai_input` and `lingkodai_output`.
 - `input/` (apart from its README) and `output/` are gitignored and
   dockerignored.
-- Tested only with a fake pipeline so far; not yet run with the real models.
+- Tested with a fake pipeline (`tests/test_run_folder.py`), then run for
+  real on 2026-10-12 with `notebooks/colab_run_folder.ipynb` on a Colab L4,
+  from branch `stakeholder-readme-ci` at `c25f163`:
+  - Input: one single question (`ta_prc_q1.ogg`) and one 2-turn subfolder
+    (`2-turn/`), all Cebuano recordings made by the team.
+  - All 3 questions: `final_lang` ceb, status ok, audio written. HK listened
+    and judged the audio clear.
+  - 344 s for the 2-turn conversation, 422 s for the single question; most
+    of it is model loading, paid once per conversation.
+  - The audio LID head loaded from the `lingkodai` org repo with no error.
+- Answer-quality notes from that run, for the RAG author. Neither comes
+  from `run_folder.py`; `src/rag.py` passes the model's text through as the
+  source notebook does:
+  - "unsáon pagsketúl ug apóintment" (schedule an appointment) got the
+    no-match fallback. Either the knowledge base has no matching chunk or
+    retrieval missed it.
+  - "unsáon pag-renew ug lisúnsya" (renew a license) got a correct answer,
+    but the generator's reasoning about the candidate documents came out in
+    front of it ("Ang tukma nga tubag mao: ..."), and TTS spoke all of it.

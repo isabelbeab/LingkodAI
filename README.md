@@ -636,7 +636,7 @@ on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
 | Private eval assets | Every file checked against `MANIFEST.sha256` | JOJIE and Colab, 2026-09-29 | 28/28 match |
 | CPU image | Built and started; page served | Locally, 2026-09-22 and 09-28; GitHub Actions from 2026-10-12 | Works |
 | GPU image | Built; imports checked | Locally, 2026-09-22; GitHub Actions from 2026-10-12 | Builds. **Never run with a GPU inside Docker** |
-| `scripts/run_folder.py` and `notebooks/colab_run_folder.ipynb` (added 2026-10-12) | Tests with a fake pipeline: folder rules, skipping finished work, failures, the summary | Every change, GitHub Actions | Pass. **Not yet run with the real models** |
+| `scripts/run_folder.py` and `notebooks/colab_run_folder.ipynb` (added 2026-10-12) | Tests with a fake pipeline: folder rules, skipping finished work, failures, the summary | Every change, GitHub Actions. Real models: the Colab notebook on an L4, 2026-10-12, one single question and one 2-turn conversation, all Cebuano | Tests pass. Colab run: 3/3 questions answered with audio, audio judged clear by listening; 344 s and 422 s per conversation (models reload per conversation). Answer-quality notes recorded in `CHANGELOG.md` |
 
 What would close the last gap: one golden-check run inside the GPU image on
 a Docker host with an NVIDIA GPU, recorded in `CHANGELOG.md` like the Colab
