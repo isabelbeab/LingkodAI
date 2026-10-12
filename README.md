@@ -72,7 +72,7 @@ alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
   runner. `app/gpu_chat_demo.py` is a standalone live demo of this shape
   for a large-VRAM host, outside the shipped artifacts, and `src/demo.py`
   (`DemoSession`) is the same shape for the demo notebooks below, aimed at a
-  24GB L4 with the smaller qwentts.cpp TTS (not yet measured).
+  40GB A100 with the qwentts.cpp TTS (not yet measured).
 
 ## Quickstart: the CLI
 
@@ -149,18 +149,25 @@ GPU yet.
 
 | Notebook | What it does | Needs |
 |---|---|---|
-| `notebooks/demo_audio.ipynb` ([Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/demo-notebooks/notebooks/demo_audio.ipynb)) | A golden clip or an uploaded recording through all seven stages; shows every stage's output and plays the spoken answer. A whole golden conversation can run turn by turn. | L4, `HF_TOKEN` |
-| `notebooks/demo_chat.ipynb` ([Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/demo-notebooks/notebooks/demo_chat.ipynb)) | Typed questions through stages 3 to 7 (GlotLID picks the language), one `ask(...)` per cell or a chat box; speech optional. | L4; `HF_TOKEN` only for speech |
+| `notebooks/demo_audio.ipynb` ([Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/demo-notebooks/notebooks/demo_audio.ipynb)) | A golden clip or an uploaded recording through all seven stages; shows every stage's output and plays the spoken answer. A whole golden conversation can run turn by turn. | A100, `HF_TOKEN` |
+| `notebooks/demo_chat.ipynb` ([Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/demo-notebooks/notebooks/demo_chat.ipynb)) | Typed questions through stages 3 to 7 (GlotLID picks the language), one `ask(...)` per cell or a chat box; speech optional. | A100 (L4 without speech); `HF_TOKEN` only for speech |
 | `notebooks/demo_replay.ipynb` ([Colab](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/demo-notebooks/notebooks/demo_replay.ipynb)) | Plays back saved demo sessions and golden-check results with the same per-stage view. | No GPU |
 
 Both live notebooks use `src/demo.py`: a `DemoSession` keeps each model
 loaded after its first use and runs every turn through the same stage
 functions and conversation rules as `run_staged` (language decided on the
 first turn, follow-up history in English, no fallbacks beyond RAG's
-no-match message and the text-only TTS turn). Speech defaults to the
-qwentts.cpp backend in segmented mode with Q8_0 weights, which leave more
-GPU memory free than F32; that default is provisional until the Stage 7 A/B
-reports. `scripts/build_qwentts.sh --cache-dir` keeps the compiled
+no-match message and the text-only TTS turn). Speech defaults to arm B of
+the Stage 7 A/B: the qwentts.cpp backend in parity mode with F32 weights,
+which matched the evaluated TTS on WER (0.211 against 0.213 over 45 DS6
+answers) at about 4 times its speed on an L4. Parity mode synthesizes the
+whole answer before it plays, so a long answer can wait over a minute (75 s
+at most on the L4). With every model kept loaded that is an estimated 21 GB
+for the chat notebook and 24 GB or more for the audio one, past an L4's
+22.5 GB usable, so both ask for an A100. On an L4, set `KEEP_LOADED = False`
+(every turn reloads its models) or `QUANT = "Q8_0"` (about 5 GB less GPU
+memory; A/B-tested in segmented mode only, where it scored about 0.05 WER
+worse). `scripts/build_qwentts.sh --cache-dir` keeps the compiled
 `tts-server` on Google Drive, so only the first session pays for the build.
 Sessions save to `MyDrive/lingkodai_demo_sessions/` (Colab) or
 `outputs/demo_sessions/` (local); keep them private, as they hold the cloned
