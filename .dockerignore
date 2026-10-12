@@ -49,10 +49,6 @@ venv/
 **/*.csv
 data/hf/
 
-# The one deliberate exception: the audio-LID head is small (2.8 MB) and is
-# tracked in git on purpose, so the GPU image needs it.
-!models/deeper_50chunks.pt
-
 # The pre-rendered demo conversations are the exception to the audio rule: the
 # CPU Dockerfile copies them, and the demo has nothing to show without them.
 !demo_audio/**

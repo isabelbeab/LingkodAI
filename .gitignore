@@ -227,7 +227,7 @@ __marimo__/
 *.xlsx
 *.csv
 
-# No blanket *.pt: models/deeper_50chunks.pt is tracked on purpose.
+# No blanket *.pt rule; no model weights are tracked (all on Hugging Face).
 
 # --- e2e integration ---
 reference/

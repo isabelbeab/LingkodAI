@@ -14,9 +14,10 @@ scripts/patch_asr_tokenizers.py is applied to local copies, not stored in
 either set of repos, so a tokenizer_config.json match means both carry the
 same unpatched config and the patch step still applies.)
 
-The audio LID head is loaded from the committed models/deeper_50chunks.pt, not
-from the Hub; the org copy is an archive, checked here only to confirm it is
-the same file.
+The audio LID head used to be committed as models/deeper_50chunks.pt. Since
+2026-10-12 src/lid_audio.py downloads it from the org repo instead, pinned to
+a commit and SHA-256, and the committed copy is gone; this script now looks
+for that recorded SHA-256 among the org repo's files.
 
 WHAT IT DOES
 ------------
@@ -26,8 +27,9 @@ weights, never touches CUDA and needs no GPU, so it can run anywhere with
 network access and a token.
 
   ASR   each beabucayan/<name> repo is compared file by file with lingkodai/<name>
-  LID   the sha256 of the committed models/deeper_50chunks.pt is looked for
-        among the files of lingkodai/lingkodai-audio-lid-head
+  LID   the recorded sha256 of deeper_50chunks.pt (formerly committed in
+        models/) is looked for among the files of
+        lingkodai/lingkodai-audio-lid-head
 
 README.md and .gitattributes differences are reported but do not fail the
 check: model cards are expected to differ and neither file is read when loading.
@@ -53,7 +55,6 @@ Paste the full output into the run record.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import platform
 import sys
@@ -67,7 +68,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 ASR_NAMES = ("lingkodai-whisper-ceb", "lingkodai-whisper-fil", "lingkodai-whisper-eng")
 LID_HEAD_NAME = "lingkodai-audio-lid-head"
-LOCAL_LID_HEAD = ROOT / "models" / "deeper_50chunks.pt"
+# SHA-256 of the head formerly committed at models/deeper_50chunks.pt; the same
+# value is pinned as src/lid_audio.py's HEAD_SHA256 (not imported: that module
+# pulls in torch, which this script avoids).
+LID_HEAD_FILE = "deeper_50chunks.pt"
+LID_HEAD_SHA256 = "101c32f02a254a1596617d44a98c9eccbc0f761862232b787ddf31e2b066dc99"
 
 # Not read by from_pretrained; a difference here is informational only.
 NON_LOAD_FILES = {"README.md", ".gitattributes"}
@@ -118,13 +123,6 @@ def compare_pair(old: dict, new: dict) -> tuple[list[str], list[str]]:
     return lines, problems
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(
@@ -140,7 +138,7 @@ def main() -> int:
     print(f"  huggingface_hub  {huggingface_hub.__version__}")
     print("  torch            not used (no weights are loaded)")
     print(f"  repo root        {ROOT}")
-    print(f"  local LID head   {LOCAL_LID_HEAD}")
+    print(f"  LID head sha256  {LID_HEAD_SHA256} (recorded)")
 
     token = huggingface_hub.get_token()
     if not token:
@@ -149,10 +147,6 @@ def main() -> int:
         return 1
     source = "HF_TOKEN environment variable" if os.environ.get("HF_TOKEN") else "login cache"
     print(f"  token source     {source}")
-
-    if not LOCAL_LID_HEAD.is_file():
-        print(f"\nMissing local LID head: {LOCAL_LID_HEAD}", file=sys.stderr)
-        return 1
 
     api = HfApi()
     all_problems: list[str] = []
@@ -179,17 +173,17 @@ def main() -> int:
         all_problems += [f"{name}: {p}" for p in problems]
 
     lid_repo = f"{args.new_owner}/{LID_HEAD_NAME}"
-    local_sha = sha256_file(LOCAL_LID_HEAD)
+    local_sha = LID_HEAD_SHA256
     lid_sha, lid_files = read(lid_repo)
     print(f"\n{LID_HEAD_NAME}")
-    print(f"  local {LOCAL_LID_HEAD.name}  sha256 {local_sha}")
+    print(f"  recorded {LID_HEAD_FILE}  sha256 {local_sha}")
     print(f"  repo  {lid_repo}  commit {lid_sha}")
     matches = [f for f, (kind, h, _) in lid_files.items() if kind == "sha256" and h == local_sha]
     for f, (kind, h, size) in sorted(lid_files.items()):
         mark = "MATCH " if f in matches else "      "
         print(f"    {mark}{f}  {kind} {h[:16]}...  {size:,} bytes")
     if not matches:
-        all_problems.append(f"{LID_HEAD_NAME}: no file matches the local {LOCAL_LID_HEAD.name}")
+        all_problems.append(f"{LID_HEAD_NAME}: no file matches the recorded {LID_HEAD_FILE}")
 
     print("\nVerdict")
     if all_problems:
@@ -199,7 +193,7 @@ def main() -> int:
         return 2
     print("  Every load-relevant file in the org copies matches the personal repos,")
     print("  weights and tokenizer files included, and the LID head file matches")
-    print(f"  the committed {LOCAL_LID_HEAD.name}. Safe to switch the repo IDs.")
+    print(f"  the recorded {LID_HEAD_FILE}. Safe to switch the repo IDs.")
     return 0
 
 

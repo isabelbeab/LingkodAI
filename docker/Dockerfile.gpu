@@ -62,7 +62,6 @@ RUN pip install --no-cache-dir ".[gpu]"
 
 COPY src/ ./src/
 COPY scripts/ ./scripts/
-COPY models/ ./models/
 COPY data/prc_chunks/ ./data/prc_chunks/
 COPY data/init_set_ds6.json ./data/init_set_ds6.json
 

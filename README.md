@@ -95,7 +95,8 @@ answers as text (JSON) and speech (WAV).
   account. Create it at huggingface.co > Settings > Access Tokens >
   Fine-grained, with read access to these repos only:
   `lingkodai/lingkodai-whisper-ceb`, `lingkodai/lingkodai-whisper-fil`,
-  `lingkodai/lingkodai-whisper-eng` and `lingkodai/lingkodai-eval-assets`.
+  `lingkodai/lingkodai-whisper-eng`, `lingkodai/lingkodai-audio-lid-head`
+  and `lingkodai/lingkodai-eval-assets`.
 
 ### Step by step
 
@@ -181,7 +182,7 @@ defaults are what the evaluated run used:
 | Variable | Default |
 |---|---|
 | `LID_ENCODER` | `openai/whisper-medium` |
-| `LID_HEAD` | `models/deeper_50chunks.pt` in this repo |
+| `LID_HEAD` | Unset: the head downloads from `lingkodai/lingkodai-audio-lid-head` at a pinned commit, checksum-verified. Set it to a local `.pt` file to load that instead |
 | `GLOTLID_REPO`, `GLOTLID_REVISION` | `cis-lmu/glotlid` at a pinned revision (`src/lid_text.py`) |
 | `RAG_CHUNKS_DIR` | `data/prc_chunks/` |
 
@@ -195,7 +196,7 @@ evaluated run, and each module's docstring lists them.
 
 | Stage | Model | Where it lives |
 |---|---|---|
-| 1 Audio LID | `openai/whisper-medium` encoder + the team's classification head | Encoder: public Hub. Head: `models/deeper_50chunks.pt` in this repo, with an identical copy in `lingkodai/lingkodai-audio-lid-head` (private) |
+| 1 Audio LID | `openai/whisper-medium` encoder + the team's classification head | Encoder: public Hub. Head: `lingkodai/lingkodai-audio-lid-head` (private, pinned commit and SHA-256) |
 | 2 ASR | `lingkodai/lingkodai-whisper-{ceb,fil,eng}` | Private, `lingkodai` org |
 | 3 Text LID | GlotLID v3 (`cis-lmu/glotlid`, pinned revision) | Public Hub |
 | 4, 6 MT | `facebook/nllb-200-3.3B` | Public Hub |
@@ -203,7 +204,8 @@ evaluated run, and each module's docstring lists them.
 | 7 TTS | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Public Hub |
 
 All of them download to the Hugging Face cache (`~/.cache/huggingface`, or
-`HF_HOME`) on first use. Nothing needs downloading by hand.
+`HF_HOME`) on first use. Nothing needs downloading by hand, and no model
+weights are stored in this repo.
 
 Licences: NLLB-200 is CC-BY-NC-4.0 and the TTS reference voices are CC-BY-NC
 (below), so the system as built is for non-commercial research use. Check
@@ -215,7 +217,6 @@ each model card before any other use.
 |---|---|
 | `data/prc_chunks/` | The RAG knowledge base: 13 `*_chunks.json` files, 547 chunks. See [Adding documents](#adding-documents-to-the-knowledge-base) |
 | `data/init_set_ds6.json` | The frozen set of acronyms the TTS spells out letter by letter, built once by `scripts/build_init_set.py` and never derived at run time. `init_set_ds7.json` and `init_set_live.json` are the DS7 set and the union of both |
-| `models/deeper_50chunks.pt` | The audio LID head (2.8 MB) |
 | `demo_audio/` | Empty except `.gitkeep`: recorded conversations for the CPU demo go here |
 
 ### Private data (Hugging Face dataset `lingkodai/lingkodai-eval-assets`)
@@ -570,8 +571,8 @@ run.
 
 ## Contributing
 
-- `src/audio.py`, `src/lid_audio.py`, `src/asr.py`, `src/lid_text.py` and
-  `models/` belong to the ASR/LID author. Do not edit them; a workaround
+- `src/audio.py`, `src/lid_audio.py`, `src/asr.py` and `src/lid_text.py`
+  belong to the ASR/LID author. Do not edit them; a workaround
   belongs in a new file.
 - `src/tts_frontend/` is vendored verbatim from JOJIE and must not be
   edited either. See `src/tts_frontend/VENDORED.md`.

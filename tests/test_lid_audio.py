@@ -8,6 +8,7 @@ pooling logic in head_forward(), just not a trained result."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from src import lid_audio
@@ -100,3 +101,54 @@ def test_unload_deletes_encoder_and_head():
     model.unload()
     assert not hasattr(model, "encoder")
     assert not hasattr(model, "head")
+
+
+# --- Head weights from the Hub (resolve_head_path) ---------------------------
+# hf_hub_download is replaced with a function returning a local temp file, so
+# nothing is downloaded.
+
+
+def _fake_download(path):
+    def fake(repo_id, filename, revision):
+        assert (repo_id, filename, revision) == (
+            lid_audio.HEAD_REPO, lid_audio.HEAD_FILENAME, lid_audio.HEAD_REVISION)
+        return str(path)
+    return fake
+
+
+def test_head_downloads_from_the_pinned_hub_file_and_checks_it(tmp_path, monkeypatch):
+    head = tmp_path / "deeper_50chunks.pt"
+    head.write_bytes(b"head weights")
+    monkeypatch.setattr(lid_audio, "HEAD_PATH", None)
+    monkeypatch.setattr(lid_audio, "HEAD_SHA256", lid_audio.sha256_file(head))
+    monkeypatch.setattr(lid_audio, "hf_hub_download", _fake_download(head))
+    assert lid_audio.resolve_head_path() == str(head)
+
+
+def test_head_with_a_different_checksum_raises(tmp_path, monkeypatch):
+    head = tmp_path / "deeper_50chunks.pt"
+    head.write_bytes(b"some other head")
+    monkeypatch.setattr(lid_audio, "HEAD_PATH", None)
+    monkeypatch.setattr(lid_audio, "hf_hub_download", _fake_download(head))
+    with pytest.raises(RuntimeError, match="Not loading a different audio LID head"):
+        lid_audio.resolve_head_path()
+
+
+def test_lid_head_override_skips_the_hub(tmp_path, monkeypatch):
+    head = tmp_path / "my_head.pt"
+    head.write_bytes(b"local")
+    monkeypatch.setattr(lid_audio, "HEAD_PATH", str(head))
+    monkeypatch.setattr(lid_audio, "hf_hub_download", lambda **kw: pytest.fail("downloaded"))
+    assert lid_audio.resolve_head_path() == str(head)
+
+
+def test_lid_head_override_that_is_missing_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(lid_audio, "HEAD_PATH", str(tmp_path / "nope.pt"))
+    with pytest.raises(FileNotFoundError, match="LID_HEAD"):
+        lid_audio.resolve_head_path()
+
+
+def test_pinned_checksum_is_the_formerly_committed_head():
+    # models/deeper_50chunks.pt's SHA-256 before it moved to the Hub
+    # (CHANGELOG.md, 2026-09-28 and 2026-10-12).
+    assert lid_audio.HEAD_SHA256 == "101c32f02a254a1596617d44a98c9eccbc0f761862232b787ddf31e2b066dc99"

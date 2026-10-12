@@ -398,3 +398,33 @@ built only once, locally.
 - GitHub's runners have no GPU, so a passing run shows the code and both
   images build and load, not that inference works. Running the golden check
   inside the GPU image on a GPU Docker host is still open.
+
+---
+
+## 2026-10-12 -- Audio LID head loaded from Hugging Face
+
+**Issue:** The stakeholders' handover conditions ask for every model to come
+from Hugging Face. The audio LID head was the one model still committed to
+the repo, as `models/deeper_50chunks.pt`. The 2026-09-28 entry kept it there
+at the ASR/LID author's call, with the org repo as an archive.
+
+**Reason:** The ASR/LID author approved the move on 2026-10-12. The org copy
+had already been checked identical (the 2026-09-28 entry). It was checked
+again today with `scripts/compare_hf_repos.py`, and by downloading it and
+loading it into `build_head()`.
+
+**Decision:**
+- `src/lid_audio.py` downloads `deeper_50chunks.pt` from
+  `lingkodai/lingkodai-audio-lid-head`, pinned to commit `0ac45810`, and
+  refuses to load it unless its SHA-256 is
+  `101c32f02a254a1596617d44a98c9eccbc0f761862232b787ddf31e2b066dc99`. That
+  is the committed file's hash, so the weights the pipeline loads have not
+  changed.
+- `LID_HEAD` still overrides it with a local file.
+- `models/` is removed, along with its `COPY` in `docker/Dockerfile.gpu` and
+  its exceptions in `.dockerignore` and `.gitignore`.
+- The `HF_TOKEN` scope gains this fifth repo.
+- `scripts/compare_hf_repos.py` now checks the org file against the
+  recorded hash instead of the deleted local copy.
+- The file stays in git history. Removing it from history would mean
+  rewriting `main`'s history, and nothing requires that.
