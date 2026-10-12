@@ -1,5 +1,7 @@
 # LingkodAI
 
+[![CI](https://github.com/isabelbeab/LingkodAI/actions/workflows/ci.yml/badge.svg)](https://github.com/isabelbeab/LingkodAI/actions/workflows/ci.yml)
+
 LingkodAI is a proof-of-concept multilingual voice assistant that answers
 spoken questions about Philippine government services. As a start, its
 knowledge base covers Professional Regulation Commission (PRC) services. A
@@ -12,6 +14,21 @@ front end, not a production system. Each stage module documents its own settings
 source of truth in its docstring (`src/mt.py`, `src/rag.py`, `src/tts.py`,
 `src/routing.py`, ...); `CHANGELOG.md` records the reasoning behind
 decisions that took discussion, in the order they were made.
+
+## Contents
+
+- [Pipeline stages](#pipeline-stages) and [What ships](#what-ships)
+- [Start here: from zero to a first answer](#start-here-from-zero-to-a-first-answer)
+- [Configure: the `.env` file](#configure-the-env-file)
+- [Data and models](#data-and-models)
+- [Input and output](#input-and-output)
+- [The apps (`app/`)](#the-apps-app)
+- [Adding documents to the knowledge base](#adding-documents-to-the-knowledge-base)
+- [Execution modes](#execution-modes)
+- [Docker images](#docker-images)
+- [Environment](#environment) (pip extras, system packages, GPU setup details)
+- [Testing](#testing), including [what has been verified](#what-has-been-verified-and-how)
+- [Contributing](#contributing)
 
 ## Pipeline stages
 
@@ -43,11 +60,309 @@ Three artifacts, all built from this one repo:
    live, and serves pre-rendered audio from recorded end-to-end
    conversations. It runs locally (see below); it is not hosted anywhere.
 3. **The GPU image**: the full pipeline containerized. It is built and
-   import-checked locally, but not run end to end in a container. The
+   import-checked, but not run end to end in a container. The
    pipeline it packages is verified on a real GPU outside Docker instead: on
    JOJIE through the `lingkod-e2e` conda environment (JOJIE is a shared
    JupyterHub and cannot run Docker), and on Colab through
    `notebooks/colab_golden_check.ipynb`.
+
+## Start here: from zero to a first answer
+
+The grey boxes in this README are commands typed into a terminal (bash, on
+Linux or macOS; WSL on Windows). There is no installer or app to download:
+the Python scripts under `scripts/` are how the system is used. You give
+`scripts/run_conversation.py` one audio file per question, and it writes the
+answers as text (JSON) and speech (WAV).
+
+### Pick a route
+
+| Route | You need | Use it to |
+|---|---|---|
+| **Colab** | A Google account with a GPU runtime, and a Hugging Face token (below) | Reproduce the evaluated results with no local setup: open `notebooks/colab_golden_check.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb)), choose an L4 GPU, add the token as a Colab Secret named `HF_TOKEN`, and run the cells. The notebook clones the repo and does every step below for you |
+| **Your own GPU machine** | Everything in "What you need" below | Run the pipeline on your own audio, or call it from other software |
+| **CPU demo only** | Docker, or Python 3.12 | Show recorded conversations and the live text frontend, with no GPU or token. See [Running the CPU demo locally](#running-the-cpu-demo-locally) |
+
+### What you need (own GPU machine)
+
+- Linux with an NVIDIA GPU of **11 GB or more** and a working driver
+  (`nvidia-smi` shows the card). The pipeline was verified on an RTX 2080 Ti
+  (11 GB) and an L4 (24 GB).
+- About **60 GB of free disk**: roughly 45 GB of model weights download on
+  the first run, plus the Python environment.
+- `git`, Python **3.12** (conda or venv), and the system packages `ffmpeg`
+  and `sox` (`sudo apt install ffmpeg sox` on Debian or Ubuntu).
+- **Membership in the `lingkodai` Hugging Face org** and a token from your own
+  account. Create it at huggingface.co > Settings > Access Tokens >
+  Fine-grained, with read access to these repos only:
+  `lingkodai/lingkodai-whisper-ceb`, `lingkodai/lingkodai-whisper-fil`,
+  `lingkodai/lingkodai-whisper-eng` and `lingkodai/lingkodai-eval-assets`.
+
+### Step by step
+
+1. **Get the code.** Everything below runs from inside this folder.
+
+   ```bash
+   git clone https://github.com/isabelbeab/LingkodAI.git
+   cd LingkodAI
+   ```
+
+2. **Make a Python environment and install.** torch comes first, built for
+   your CUDA version (cu126 below; see pytorch.org for others), then the
+   pipeline. The conda version is under
+   [Setting up the GPU pipeline](#setting-up-the-gpu-pipeline).
+
+   ```bash
+   python3.12 -m venv .venv && source .venv/bin/activate
+   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+   pip install -e ".[gpu]"
+   ```
+
+3. **Create your configuration file, `.env`,** from the template, and put
+   your token on the `HF_TOKEN=` line. [Configure](#configure-the-env-file)
+   explains every line.
+
+   ```bash
+   cp .env.example .env
+   nano .env                         # or any editor: HF_TOKEN=hf_...
+   set -a; source .env; set +a       # load it into this terminal
+   ```
+
+4. **Run the two one-time setup scripts.** Each prints lines to add to
+   `.env`; add them, then load `.env` again. Why they exist is explained
+   under [Setting up the GPU pipeline](#setting-up-the-gpu-pipeline).
+
+   ```bash
+   python scripts/patch_asr_tokenizers.py --out outputs/asr_patched   # prints the ASR_CEB, ASR_FIL, ASR_ENG lines
+   python scripts/fetch_eval_assets.py --out outputs/eval_assets      # prints the TTS_REF_DIR line
+   set -a; source .env; set +a
+   ```
+
+5. **Ask a question.** Any recording of one PRC question in Cebuano,
+   Filipino or English works. The downloaded eval assets include 24 (list
+   them with `find outputs/eval_assets/golden/audio -type f | sort`).
+
+   ```bash
+   python scripts/run_conversation.py --audio my_question.m4a --out outputs/first_run
+   ```
+
+   The first run downloads the models and takes a while; the log prints each
+   phase. When it finishes, `outputs/first_run/` holds the transcript, the
+   answers and the spoken answer: see [Input and output](#input-and-output).
+
+6. **Optional: reproduce the evaluated results** with the golden check
+   under [Testing](#testing).
+
+In every new terminal, run `source .venv/bin/activate` (or
+`conda activate lingkod-e2e`) and `set -a; source .env; set +a` again before
+running anything.
+
+## Configure: the `.env` file
+
+`.env` is the repo's configuration file: one `NAME=value` per line, read by
+the scripts as environment variables. Create it with
+`cp .env.example .env`; the template explains every line. `.env` holds your
+token, so it is gitignored and must never be committed or shared. Nothing in
+the code reads `.env` by itself: load it into each new terminal with
+`set -a; source .env; set +a`. The Docker images take it with
+`--env-file .env` instead.
+
+| Variable | Needed for | Where the value comes from |
+|---|---|---|
+| `HF_TOKEN` | Full pipeline, setup scripts | Your fine-grained read-only Hugging Face token (see "What you need") |
+| `ASR_CEB`, `ASR_FIL`, `ASR_ENG` | Full pipeline | Printed by `scripts/patch_asr_tokenizers.py`. Leave them commented out until then: an empty value breaks loading |
+| `TTS_REF_DIR` | Speech output (stage 7) | Printed by `scripts/fetch_eval_assets.py` |
+| `APP_PASSWORD` | CPU demo page | Your choice. The page refuses to start without it |
+| `HF_HOME` | Docker only | Already set inside both images; leave it commented out elsewhere |
+| `DEMO_INPUT_AUDIO_DIR` | `app/gpu_chat_demo.py` audio mode | A folder of question recordings (not in the template) |
+
+Optional overrides, not in the template, for when a source moves. The
+defaults are what the evaluated run used:
+
+| Variable | Default |
+|---|---|
+| `LID_ENCODER` | `openai/whisper-medium` |
+| `LID_HEAD` | `models/deeper_50chunks.pt` in this repo |
+| `GLOTLID_REPO`, `GLOTLID_REVISION` | `cis-lmu/glotlid` at a pinned revision (`src/lid_text.py`) |
+| `RAG_CHUNKS_DIR` | `data/prc_chunks/` |
+
+The models, prompts, decoding settings and thresholds are deliberately
+**not** configurable: they are fixed in each `src/` module to match the
+evaluated run, and each module's docstring lists them.
+
+## Data and models
+
+### Models
+
+| Stage | Model | Where it lives |
+|---|---|---|
+| 1 Audio LID | `openai/whisper-medium` encoder + the team's classification head | Encoder: public Hub. Head: `models/deeper_50chunks.pt` in this repo, with an identical copy in `lingkodai/lingkodai-audio-lid-head` (private) |
+| 2 ASR | `lingkodai/lingkodai-whisper-{ceb,fil,eng}` | Private, `lingkodai` org |
+| 3 Text LID | GlotLID v3 (`cis-lmu/glotlid`, pinned revision) | Public Hub |
+| 4, 6 MT | `facebook/nllb-200-3.3B` | Public Hub |
+| 5 RAG | `microsoft/harrier-oss-v1-0.6b` (embeddings), `Qwen/Qwen3-4B-Instruct-2507` (4-bit, generation) | Public Hub |
+| 7 TTS | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Public Hub |
+
+All of them download to the Hugging Face cache (`~/.cache/huggingface`, or
+`HF_HOME`) on first use. Nothing needs downloading by hand.
+
+Licences: NLLB-200 is CC-BY-NC-4.0 and the TTS reference voices are CC-BY-NC
+(below), so the system as built is for non-commercial research use. Check
+each model card before any other use.
+
+### Data in this repo
+
+| Path | What it is |
+|---|---|
+| `data/prc_chunks/` | The RAG knowledge base: 13 `*_chunks.json` files, 547 chunks. See [Adding documents](#adding-documents-to-the-knowledge-base) |
+| `data/init_set_ds6.json` | The frozen set of acronyms the TTS spells out letter by letter, built once by `scripts/build_init_set.py` and never derived at run time. `init_set_ds7.json` and `init_set_live.json` are the DS7 set and the union of both |
+| `models/deeper_50chunks.pt` | The audio LID head (2.8 MB) |
+| `demo_audio/` | Empty except `.gitkeep`: recorded conversations for the CPU demo go here |
+
+### Private data (Hugging Face dataset `lingkodai/lingkodai-eval-assets`)
+
+Files that cannot live in a public repo, downloaded and checksum-verified by
+`scripts/fetch_eval_assets.py`:
+
+- `tts_ref/`: the three TTS reference voices, Philippine Languages Database
+  speaker audio under a CC-BY-NC, research-only licence. Do not
+  redistribute them.
+- `golden/DS6_augmented.xlsx`: the evaluated Scenario 2 run (2,235 rows), the
+  reference for the golden check.
+- `golden/audio/`: the golden conversation `CONV-MT-001` in all three
+  languages, 24 recordings.
+- `MANIFEST.sha256`: a checksum for every file.
+
+## Input and output
+
+### Input
+
+`scripts/run_conversation.py --audio Q1 [Q2 ...] --out DIR`
+
+| Argument | Meaning |
+|---|---|
+| `--audio` | One audio file per turn, in conversation order. One file is a single question; several make a multi-turn conversation in which follow-ups ("How much is it?") are read in the light of earlier answers. Any format `ffmpeg` reads (wav, m4a, aac, mp3, ...); every file is converted to 16 kHz mono |
+| `--out` | Output folder, created if missing |
+| `--init-set` | Optional. The acronym set; default `data/init_set_ds6.json` |
+| `--rag-data-dir` | Optional. A different knowledge-base folder; default `data/prc_chunks/` |
+
+Each recording should be one question in Cebuano, Filipino or English.
+Audio LID looks at the first 30 seconds. The evaluated recordings are
+single short questions; long recordings are untested.
+
+### Output
+
+```text
+DIR/
+  manifest.json      the conversation: turn count, locked language
+  turn_0.json        everything the pipeline produced for turn 1
+  turn_0.wav         the spoken answer for turn 1 (24 kHz)
+  turn_1.json ...
+```
+
+`manifest.json`: `n_turns`, `final_lang` (the language locked for the
+conversation), `was_overridden` (true when text LID overrode audio LID), and
+`turn_files`.
+
+`turn_N.json`, one per turn, by stage:
+
+| Stage | Fields |
+|---|---|
+| Input | `turn_idx`, `audio_path` |
+| 1 Audio LID (turn 1 only) | `pred_lang`, `lid_confidence` |
+| 2 ASR | `transcript` |
+| 3 Text LID and routing | `text_lang` and `text_lid_confidence` (turn 1 only), `final_lang`, `was_overridden` |
+| 4 MT in | `english_query`, `mt_in_ok`, `mt_in_failure_reason` |
+| 5 RAG | `resolved_query` (a follow-up rewritten as a standalone question), `was_dependent` (whether it was a follow-up), `english_answer`, `chunk_ids` (the knowledge-base chunks used; empty when nothing matched) |
+| 6 MT out | `native_answer`, `mt_out_ok`, `mt_out_failure_reason` |
+| 7 TTS | `tts_ok`, `tts_failure_reason`, `has_audio`, `audio_out_sr` |
+
+A turn with `tts_ok: false` has its text answer but no WAV, and
+`tts_failure_reason` says why. That is the designed fallback, not a crash.
+When nothing in the knowledge base matches, the answer is a fixed message
+pointing to PRC's contact channels, and `chunk_ids` is empty.
+
+The same output folder is what the CPU demo shows: copy it into
+`demo_audio/` and it appears as a recorded conversation.
+
+From Python, `src.pipeline.run_staged(audio_paths, init_set)` returns the
+same records as objects (load `init_set` with
+`src.tts.load_init_set("data/init_set_ds6.json")`).
+
+## The apps (`app/`)
+
+There is no `app.py` at the top level. The two Streamlit apps live in
+`app/`:
+
+| App | What it does | Needs |
+|---|---|---|
+| `app/streamlit_app.py` | The CPU demo: plays recorded conversations stage by stage, and runs GlotLID and the TTS text frontend live on typed text | No GPU, no token. `APP_PASSWORD` |
+| `app/gpu_chat_demo.py` | A live demo: typed questions (stages 4 to 6), or recorded and microphone questions (stages 2 and 4 to 7), with every stage's output shown | A GPU with about 40 GB (it was run on an A100), the full setup above, and `DEMO_INPUT_AUDIO_DIR` |
+
+### Running the CPU demo locally
+
+With Docker:
+
+```bash
+docker build -f docker/Dockerfile.cpu -t lingkodai-cpu .
+docker run --rm -p 8080:8080 -e APP_PASSWORD=changeme lingkodai-cpu
+```
+
+Open `http://localhost:8080`. Without Docker, in a Python 3.12 environment:
+
+```bash
+pip install -e ".[app]"
+APP_PASSWORD=changeme streamlit run app/streamlit_app.py    # opens on http://localhost:8501
+```
+
+The page is password-gated: the synthesized audio in the "recorded
+conversations" tab is a cloned voice from a Philippine Languages Database
+research speaker, under a CC-BY-NC, research-only licence, so the demo is
+not left fully public. Use a real password outside local testing. No
+`HF_TOKEN` is needed; GlotLID's model (about 1.2 GB) downloads on first use
+instead of being baked in.
+
+`demo_audio/` is gitignored and ships empty by default (only `.gitkeep`
+committed), so the "recorded conversations" tab is empty on a fresh clone.
+Fill it with `scripts/run_conversation.py --out` folders, copied in
+verbatim (with Docker, before building the image). Nothing errors without
+them; the tab just says so.
+
+### Running the live GPU demo
+
+After the full setup ([Start here](#start-here-from-zero-to-a-first-answer)):
+
+```bash
+pip install -e ".[gpu,app]"
+export DEMO_INPUT_AUDIO_DIR=outputs/eval_assets/golden/audio   # or any folder of question recordings
+streamlit run app/gpu_chat_demo.py
+```
+
+It loads each model on first use and keeps it loaded, so the first question
+is slow and later ones are not. The page has **no password gate**, and its
+audio mode speaks in the cloned research voice: keep it on a private
+network, or share any tunnel URL privately and stop it after use.
+
+## Adding documents to the knowledge base
+
+> **Placeholder: the RAG author is writing this section.** It will cover how
+> to turn a new PRC document into a `*_chunks.json` file, the JSON format of
+> a chunk (every field and what it is for), naming rules, and how to check
+> that the new document is retrieved.
+
+Facts the section must account for, from the current code:
+
+- `src/rag.py` loads every `*_chunks.json` file in `data/prc_chunks/`
+  (or `RAG_CHUNKS_DIR`). A file named anything else, such as
+  `new_chunks (2).json` from a browser download, is silently skipped.
+- The loader refuses to start unless it finds exactly 13 files and 547
+  chunks (`EXPECTED_CHUNK_FILES` and `EXPECTED_TOTAL_CHUNKS` in
+  `src/rag.py`), and every `chunk_id` is unique across files. Adding a
+  document means updating both numbers in the same change.
+- The search index is built in memory from these files every time the RAG
+  stage loads, so there is no separate indexing step.
+- New documents are a change from the evaluated knowledge base: record them
+  in `CHANGELOG.md`, and expect golden-check answers that cite them to
+  differ from DS6.
 
 ## Execution modes
 
@@ -72,81 +387,39 @@ alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
   runner. `app/gpu_chat_demo.py` is a standalone live demo of this shape
   for a large-VRAM host, outside the shipped artifacts.
 
-## Quickstart: the CLI
+## Docker images
 
-```bash
-python scripts/run_conversation.py --audio TURN1.wav TURN2.wav --out outputs/RUN_NAME
-```
+Neither image contains model weights or secrets, and both install from the
+same `pyproject.toml`. GitHub Actions builds and checks both on every push
+and pull request (see [Automatic checks](#automatic-checks-github-actions)).
 
-`TURN1.wav`, `TURN2.wav` and `RUN_NAME` are placeholders -- pass as many
-`--audio` files as the conversation has turns, in order. This needs the
-`gpu` extra (see Environment below) and, for a practical runtime, an actual
-GPU: NLLB and Qwen3-TTS on CPU would technically run but far too slowly to
-be useful. Never run this against real models on a laptop with no GPU --
-develop and test with fakes locally (see Testing below), and run for real
-only on a machine that actually has one.
+- **CPU image** (`docker/Dockerfile.cpu`): see
+  [Running the CPU demo locally](#running-the-cpu-demo-locally).
+- **GPU image** (`docker/Dockerfile.gpu`):
 
-Output: one `manifest.json` (turn count, locked `final_lang`, whether
-routing overrode audio LID), one `turn_N.json` per turn (transcript, English
-query, English answer, native answer, chunk ids, and whether each stage
-succeeded), and one `turn_N.wav` per turn where synthesis succeeded.
+  ```bash
+  docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
+  ```
 
-## Running the CPU demo locally
-
-```bash
-docker build -f docker/Dockerfile.cpu -t lingkodai-cpu .
-docker run --rm -p 8080:8080 -e APP_PASSWORD=changeme lingkodai-cpu
-```
-
-Open `http://localhost:8080`. The page is password-gated: the synthesized
-audio in the "recorded conversations" tab is a cloned voice from a Philippine
-Languages Database research speaker, under a CC-BY-NC, research-only
-licence, so the demo is not left fully public. No `HF_TOKEN` is needed for
-this image; GlotLID's model (about 1.2 GB) downloads on first use instead of
-being baked in.
-
-`demo_audio/` is gitignored and ships empty by default (only `.gitkeep`
-committed). Populate it with directories, each one a
-`scripts/run_conversation.py --out` output copied in verbatim, before
-building the image if you want the "recorded conversations" tab to show
-anything. Without it, that tab just says so; nothing errors.
-
-## Building the GPU image
-
-```bash
-docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
-```
-
-This build needs no GPU and only import-checks the pipeline (no CUDA touched,
-no weights loaded). It has not been run end to end in a container: the GPU
-machines this project has used, JOJIE (a shared JupyterHub) and Colab,
-cannot run Docker. Real GPU runs happen outside Docker instead, through the
-`lingkod-e2e` conda environment on JOJIE or the Colab notebook, both
-installing from the same `pyproject.toml`. Weights are not baked into the image (roughly 45 GB across
-seven models) and download to `/data/hf` on first boot. The two one-time
-steps under Setting up the GPU pipeline below still apply inside the
-container: run them with their `--out` under the mounted `/data` volume so
-they persist across runs. `docker/Dockerfile.gpu`'s header shows the
-commands.
+  This build needs no GPU and only import-checks the pipeline (no CUDA
+  touched, no weights loaded). It has not been run end to end in a
+  container: the GPU machines this project has used, JOJIE (a shared
+  JupyterHub) and Colab, cannot run Docker. Running it needs a host with an
+  NVIDIA driver and the NVIDIA Container Toolkit. Weights are not baked into
+  the image (roughly 45 GB across seven models) and download to `/data/hf`
+  on first boot. The two one-time steps under
+  [Setting up the GPU pipeline](#setting-up-the-gpu-pipeline) still apply
+  inside the container: run them with their `--out` under the mounted
+  `/data` volume so they persist across runs. `docker/Dockerfile.gpu`'s
+  header shows the commands.
 
 ## Environment
 
-Copy `.env.example` to `.env` and fill it in; `.env` is gitignored and must
-never be committed. See that file for what each variable is for. Nothing in
-the code reads `.env` by itself: load it into each new shell before running
-a script, with
-
-```bash
-set -a; source .env; set +a
-```
-
-(The Docker images take it with `--env-file .env` instead.)
-
-Four pip extras, defined in `pyproject.toml`:
+The pip extras, defined in `pyproject.toml`:
 
 - base (no extra): the CPU-only, text-only core -- the TTS text frontend,
   text language identification, and the chunk loader. No torch.
-- `app`: adds Streamlit, for the CPU demo.
+- `app`: adds Streamlit, for the demos.
 - `gpu`: the full pipeline. torch and torchaudio are deliberately absent
   from `pyproject.toml` (the correct CUDA build differs per machine) --
   install them first, matching the target GPU, then `pip install -e ".[gpu]"`.
@@ -204,13 +477,6 @@ Then two one-time steps, both needing `HF_TOKEN` in the environment (see
    python scripts/fetch_eval_assets.py --out outputs/eval_assets
    ```
 
-The TTS reference clips are Philippine Languages Database speaker audio
-under a CC-BY-NC, research-only licence. Do not redistribute them.
-
-The models themselves (roughly 45 GB across seven) download from the Hugging
-Face Hub on first use. Apart from the three ASR checkpoints, all are public
-and ungated.
-
 ## Testing
 
 ```bash
@@ -225,6 +491,24 @@ Every stage module has a smoke test that runs on CPU with fakes -- no real
 model is downloaded or loaded by the test suite. `tests/test_init_set.py`
 asserts the frozen initialism set's count and a few known members, so a
 regenerated set cannot silently change synthesis without a test noticing.
+
+### Automatic checks (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on every push and pull request, on GitHub's
+free CPU runners:
+
+1. **Tests**: the full `pytest` suite above.
+2. **CPU image**: builds `docker/Dockerfile.cpu`, starts the container, and
+   fails unless the page answers on port 8080 within two minutes.
+3. **GPU image**: builds `docker/Dockerfile.gpu` (including its import
+   check), then imports every pipeline module inside the container and runs
+   the CLI's `--help`. The runners have no GPU, so this proves the image
+   builds and the code loads, not that inference works.
+
+A red cross next to a commit or pull request on GitHub means one of these
+failed; the Actions tab shows which step, with its log.
+
+### The golden check
 
 The acceptance test is the golden check: three real conversations (one per
 language, same source audio) run through the full pipeline on a GPU and
@@ -269,6 +553,21 @@ audio). The turn's text answer is unaffected. It happened once in 24 turns
 on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
 2026-09-29.
 
+### What has been verified, and how
+
+| What | How | Where and when | Result |
+|---|---|---|---|
+| Every stage's code | The `pytest` suite, CPU, fake models | Before every merge; GitHub Actions from 2026-10-12 | All pass |
+| Full pipeline with the real models | Golden check against DS6 | JOJIE (conda, RTX 2080 Ti): 2026-09-22 and 09-23. Colab (L4): 2026-09-29 | `final_lang` 3/3; text diffs read and recorded in `CHANGELOG.md`; TTS 24/24 synthesized, one runaway (above) |
+| ASR checkpoints in the `lingkodai` org | Transcripts compared with the original checkpoints, 24 clips | JOJIE, 2026-09-29 | 24/24 identical |
+| Private eval assets | Every file checked against `MANIFEST.sha256` | JOJIE and Colab, 2026-09-29 | 28/28 match |
+| CPU image | Built and started; page served | Locally, 2026-09-22 and 09-28; GitHub Actions from 2026-10-12 | Works |
+| GPU image | Built; imports checked | Locally, 2026-09-22; GitHub Actions from 2026-10-12 | Builds. **Never run with a GPU inside Docker** |
+
+What would close the last gap: one golden-check run inside the GPU image on
+a Docker host with an NVIDIA GPU, recorded in `CHANGELOG.md` like the Colab
+run.
+
 ## Contributing
 
 - `src/audio.py`, `src/lid_audio.py`, `src/asr.py`, `src/lid_text.py` and
@@ -281,7 +580,7 @@ on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
   source notebook. Prompts must be byte-identical to the source.
 - Work happens on a feature branch; PRs to `main` only, never a direct
   push. One stage per commit; commit messages start with the stage
-  number.
+  number. The GitHub Actions checks must pass before a merge.
 - No silent fallbacks: a missing file, token, or unexpected shape raises
   with a clear message rather than guessing. The only designed fallbacks
   anywhere in the pipeline are RAG's no-match message (`src/rag.py`) and

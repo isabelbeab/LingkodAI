@@ -359,3 +359,42 @@ but was not confirmed by listening. Known issue, not fixed: a guard that treats 
 segment reaching the cap as a TTS failure (text-only turn, the existing
 designed fallback) is a candidate follow-up, but it is a deviation from the
 source notebook and needs a GPU test.
+
+---
+
+## 2026-10-12 -- README "Start here" and automatic checks on GitHub
+
+**Issue:** At the Milestone 3.5 handover, a stakeholder reading the README
+asked:
+- what the terminal commands are for
+- whether the repo has to be cloned first
+- what "the config file" is and how to make one
+- what was actually tested
+- how anyone can be sure the Docker images work
+
+The meeting asked the README to cover setup, environment, data, the apps,
+input, output, configuration, and adding documents to the knowledge base.
+
+**Reason:** The README assumed a reader who already knew the project. It
+never said to clone the repo, mentioned `.env` only in passing, and did not
+describe the output files. Every check so far had also been run by hand.
+Nothing re-checked the repo when it changed, and the GPU image had been
+built only once, locally.
+
+**Decision:**
+- The README gains:
+  - a "Start here" path from a fresh machine to a first answer
+  - a table of every `.env` variable and where its value comes from
+  - data and model tables
+  - the input arguments and every output field
+  - how to run both apps
+  - a table of what has been verified, how and when
+- "Adding documents to the knowledge base" is a placeholder for the RAG
+  author, listing the loader's current constraints.
+- `.github/workflows/ci.yml` runs on every push and pull request:
+  - the pytest suite
+  - a build of the CPU image, which must then serve its page
+  - a build of the GPU image, which must then import every pipeline module
+- GitHub's runners have no GPU, so a passing run shows the code and both
+  images build and load, not that inference works. Running the golden check
+  inside the GPU image on a GPU Docker host is still open.
