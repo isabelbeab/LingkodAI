@@ -13,10 +13,13 @@ Two input modes:
   - Audio: stages 2 + 4-7 (ASR, MT in, RAG, MT out, TTS), an audio question
     in (either a pre-staged file from a dropdown, or a live microphone
     recording via st.audio_input), transcript + text answer + synthesized
-    answer audio back. No audio LID (stage 1): the language is picked
-    manually in a language selector, the same simplification text mode makes
-    for GlotLID (optional auto-detect there, manual only here). This also
-    keeps the audio LID head off the demo host.
+    answer audio back. The language selector defaults to auto-detect, as
+    in text mode: on the first audio turn of a conversation, audio LID
+    (stage 1) picks the ASR checkpoint, GlotLID checks the transcript, and
+    src/routing.py sets the answer language (text LID wins on
+    disagreement). Both are locked for the rest of the conversation, as in
+    src/pipeline.py; "New conversation" clears the lock. Picking a language
+    manually skips LID for that turn.
 
 The dropdown of known-good pre-staged files is the lower-risk default for a
 live audience (no room noise, no mic permission prompts, no silent takes);
@@ -33,7 +36,8 @@ tts.load() is cached once, on first audio-mode use. The combined worst case
 check `nvidia-smi` after exercising all three languages once.
 
 Environment:
-  HF_TOKEN            required: the ASR checkpoints are private.
+  HF_TOKEN            required: the ASR checkpoints and the audio LID head
+                      are private.
   ASR_CEB/FIL/ENG     required: point at scripts/patch_asr_tokenizers.py's
                       output; that script must be run first (it produces
                       local checkpoint copies; the patch is not in the HF
@@ -57,7 +61,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src import asr, audio, lid_text, mt, rag, tts  # noqa: E402
+from src import asr, audio, lid_audio, lid_text, mt, rag, routing, tts  # noqa: E402
 
 LANG_NAMES = {"ceb": "Cebuano", "fil": "Filipino", "eng": "English"}
 
@@ -69,6 +73,11 @@ AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac"}
 @st.cache_resource(show_spinner="Loading GlotLID (text language ID)...")
 def load_text_lid() -> lid_text.TextLID:
     return lid_text.load()
+
+
+@st.cache_resource(show_spinner="Loading audio LID (whisper-medium encoder + head)...")
+def load_audio_lid() -> lid_audio.AudioLID:
+    return lid_audio.load()
 
 
 @st.cache_resource(show_spinner="Loading NLLB (translation, ~6.7GB, stays resident)...")
@@ -184,18 +193,47 @@ def _wav_bytes(audio_np, sr: int) -> bytes:
     return buf.getvalue()
 
 
-def run_audio_turn(audio_path: Path, lang: str, history: list[rag.HistoryTurn]) -> dict:
-    """One question from a pre-staged audio file through stages 2 + 4-7.
+def run_audio_turn(audio_path: Path, lang: str | None, history: list[rag.HistoryTurn]) -> dict:
+    """One question from a pre-staged audio file through stages 1-7.
+    lang None means auto-detect: stages 1 and 3 run on the conversation's
+    first audio turn and their result is locked in session state, as in
+    src/pipeline.py. A given lang skips LID and is used for ASR and the
+    answer.
     Reuses run_turn for the MT/RAG/MT chain rather than duplicating it --
     its own stage-by-stage inline output (English query, answer, native
     answer) all appears here too, well before this function reaches TTS,
     since TTS is by far the slowest stage. Text results are never gated
     behind audio synthesis finishing."""
+    aud = audio.load_audio(str(audio_path))
+    locked = st.session_state.get("audio_routing") if lang is None else None
+    asr_lang = lang or (locked.result.pred_lang if locked else None)
+
+    if asr_lang is None:
+        with st.status("Stage 1: identifying the language (audio LID)...", expanded=True) as status:
+            lid_result = load_audio_lid().predict(aud)
+            asr_lang = lid_result.lang
+            st.write(f"**Detected:** {LANG_NAMES[asr_lang]} (confidence {lid_result.confidence:.3f})")
+            status.update(label="Stage 1 done: language identified", state="complete", expanded=True)
+
     with st.status("Stage 2: transcribing (ASR)...", expanded=True) as status:
-        aud = audio.load_audio(str(audio_path))
-        transcript = load_asr(lang).transcribe(aud)
+        transcript = load_asr(asr_lang).transcribe(aud)
         st.write(f"**Transcript:** {transcript}")
         status.update(label="Stage 2 done: transcribed", state="complete", expanded=True)
+
+    if lang is None:
+        if locked is None:
+            with st.status("Stage 3: checking the transcript (text LID) + routing...", expanded=True) as status:
+                text_result = load_text_lid().predict(transcript)
+                locked = routing.ConversationRouting.from_first_turn(asr_lang, text_result.lang)
+                st.session_state.audio_routing = locked
+                if text_result.lang is not None:
+                    st.write(f"**Text LID:** {LANG_NAMES[text_result.lang]} (confidence {text_result.confidence:.3f})")
+                if locked.was_overridden:
+                    st.write("Text LID disagreed with audio LID, so the answer follows text LID.")
+                status.update(label="Stage 3 done: language locked for this conversation", state="complete", expanded=True)
+        else:
+            st.caption(f"Language locked from this conversation's first audio turn: {LANG_NAMES[locked.final_lang]}")
+        lang = locked.final_lang
 
     result = run_turn(transcript, lang, history)
     result["transcript"] = transcript
@@ -239,6 +277,7 @@ def main() -> None:
         if st.button("New conversation"):
             st.session_state.history = []
             st.session_state.display_history = []
+            st.session_state.pop("audio_routing", None)
             st.rerun()
         if st.button("Warm up text mode now"):
             load_mt()
@@ -314,7 +353,9 @@ def main() -> None:
             st.session_state.display_history.append(turn)
 
     else:  # Audio mode
-        lang_choice = st.radio("Language", ["Cebuano", "Filipino", "English"], horizontal=True, key="audio_lang")
+        lang_choice = st.radio(
+            "Language", ["Auto-detect (audio LID)", "Cebuano", "Filipino", "English"], horizontal=True, key="audio_lang"
+        )
         audio_source = st.radio(
             "Audio source", ["Pre-recorded file", "Record with microphone"], horizontal=True, key="audio_source"
         )
@@ -345,7 +386,7 @@ def main() -> None:
                 audio_label = "microphone recording"
 
         if audio_path is not None and st.button("Ask", type="primary"):
-            lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}[lang_choice]
+            lang = {"Cebuano": "ceb", "Filipino": "fil", "English": "eng"}.get(lang_choice)  # None = auto-detect
 
             with st.chat_message("user"):
                 st.audio(str(audio_path))
@@ -360,6 +401,7 @@ def main() -> None:
                     st.stop()
                 wall = time.time() - t0
 
+                lang = turn["final_lang"]
                 lang_label = LANG_NAMES.get(lang, lang)
                 st.caption(f"Transcript: {turn['transcript']}")
                 st.markdown(f"**English:** {turn['english_answer']}")
