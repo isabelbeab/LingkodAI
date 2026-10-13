@@ -16,7 +16,7 @@ Two input modes:
     answer audio back. No audio LID (stage 1): the language is picked
     manually in a language selector, the same simplification text mode makes
     for GlotLID (optional auto-detect there, manual only here). This also
-    keeps models/deeper_50chunks.pt off the demo host.
+    keeps the audio LID head off the demo host.
 
 The dropdown of known-good pre-staged files is the lower-risk default for a
 live audience (no room noise, no mic permission prompts, no silent takes);

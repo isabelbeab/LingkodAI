@@ -1,0 +1,98 @@
+# Automatic checks on every push and pull request (README, "Automatic checks").
+#
+# GitHub's free runners have no GPU, so nothing here loads a real model:
+#   tests      the pytest suite, CPU torch, fake models only
+#   cpu-image  builds docker/Dockerfile.cpu, starts it, waits for the page
+#   gpu-image  builds docker/Dockerfile.gpu, imports the pipeline inside it
+# Passing proves the code and both images build and load. It does not prove
+# GPU inference: that is the golden check (README, Testing).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (pytest, CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (CPU torch first, then the repo with every extra)
+        run: |
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[app,gpu,eval,dev]"
+          python -c "import sys, torch, transformers; print('python', sys.version.split()[0], '| torch', torch.__version__, '| transformers', transformers.__version__)"
+      - name: Run the tests
+        run: pytest tests/
+
+  cpu-image:
+    name: CPU image (build and start)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build docker/Dockerfile.cpu
+        run: docker build -f docker/Dockerfile.cpu -t lingkodai-cpu .
+      - name: Report the image size
+        run: docker image ls lingkodai-cpu
+      - name: Start the container
+        run: docker run -d --name lingkodai-cpu -p 8080:8080 -e APP_PASSWORD=ci-check-only lingkodai-cpu
+      - name: Wait for the page (up to 2 minutes)
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/_stcore/health > /dev/null; then
+              echo "health check OK after about $((i * 2)) s"
+              curl -fsS -o /dev/null -w "page HTTP %{http_code}\n" http://localhost:8080/
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the page did not answer within 2 minutes"
+          exit 1
+      - name: Container log
+        if: always()
+        run: docker logs lingkodai-cpu
+
+  gpu-image:
+    name: GPU image (build and import, no GPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (torch with CUDA makes a large image)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af > /dev/null
+          df -h /
+      - name: Build docker/Dockerfile.gpu (includes its import check)
+        run: docker build -f docker/Dockerfile.gpu -t lingkodai-gpu .
+      - name: Report the image size
+        run: docker image ls lingkodai-gpu
+      - name: Default command (prints CUDA availability, False here)
+        run: docker run --rm lingkodai-gpu
+      - name: Import every pipeline module inside the image
+        run: |
+          docker run --rm lingkodai-gpu python -c "
+          from src import audio, lid_audio, asr, lid_text, routing, mt, rag, tts, pipeline
+          import torch, transformers
+          print('pipeline imports OK | torch', torch.__version__, '| transformers', transformers.__version__)
+          "
+      - name: CLI help
+        run: docker run --rm lingkodai-gpu python scripts/run_conversation.py --help

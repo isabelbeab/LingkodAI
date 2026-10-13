@@ -10,13 +10,22 @@ The chunking, the valid-chunk count, and the fp32 encoder precision match the
 conditions under which the head was trained and must not be changed without
 retraining the head.
 
+The head's weights (deeper_50chunks.pt, 2.8 MB) are downloaded from the
+private Hugging Face repo lingkodai/lingkodai-audio-lid-head at a pinned
+commit and checked against their SHA-256 before loading. Reading that repo
+needs HF_TOKEN, like the ASR checkpoints. The file is the one that used to be
+committed at models/deeper_50chunks.pt (same SHA-256; CHANGELOG.md,
+2026-10-12).
+
 Environment variables (all optional, defaults shown):
     LID_ENCODER  openai/whisper-medium
-    LID_HEAD     <repository>/models/deeper_50chunks.pt
+    LID_HEAD     unset: download the head from the Hub as above. Set it to a
+                 local .pt file to load that instead (no checksum check).
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +34,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from huggingface_hub import hf_hub_download
 from transformers import WhisperFeatureExtractor, WhisperForConditionalGeneration
 
 from .audio import SAMPLE_RATE, load_audio
@@ -37,10 +47,37 @@ FRAMES_PER_SEC = 50
 MAX_FRAMES = 1500
 
 ENCODER_SOURCE = os.environ.get("LID_ENCODER", "openai/whisper-medium")
-HEAD_PATH = os.environ.get(
-    "LID_HEAD",
-    str(Path(__file__).resolve().parents[1] / "models" / "deeper_50chunks.pt"),
-)
+HEAD_PATH = os.environ.get("LID_HEAD")  # optional local override, see the module docstring
+HEAD_REPO = "lingkodai/lingkodai-audio-lid-head"
+HEAD_REVISION = "0ac458102831e98e99df68c8ddc3bf0b5baaa2c3"
+HEAD_FILENAME = "deeper_50chunks.pt"
+HEAD_SHA256 = "101c32f02a254a1596617d44a98c9eccbc0f761862232b787ddf31e2b066dc99"
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_head_path() -> str:
+    """Local path of the head's weights: LID_HEAD if set, otherwise the pinned
+    Hub file, downloaded once into the Hugging Face cache and checked against
+    HEAD_SHA256. A mismatch raises rather than loading a different head."""
+    if HEAD_PATH:
+        if not Path(HEAD_PATH).is_file():
+            raise FileNotFoundError(f"LID_HEAD is set but is not a file: {HEAD_PATH}")
+        return HEAD_PATH
+    path = hf_hub_download(repo_id=HEAD_REPO, filename=HEAD_FILENAME, revision=HEAD_REVISION)
+    actual = sha256_file(path)
+    if actual != HEAD_SHA256:
+        raise RuntimeError(
+            f"{HEAD_REPO}/{HEAD_FILENAME} at {HEAD_REVISION[:8]} has sha256 {actual}, "
+            f"expected {HEAD_SHA256}. Not loading a different audio LID head."
+        )
+    return path
 
 
 def get_device() -> str:
@@ -162,7 +199,7 @@ def load(device: str | None = None) -> AudioLID:
     del full_model
 
     head = build_head()
-    head.load_state_dict(torch.load(HEAD_PATH, map_location=device, weights_only=True))
+    head.load_state_dict(torch.load(resolve_head_path(), map_location=device, weights_only=True))
     head = head.to(device).eval()
 
     return AudioLID(feature_extractor, encoder, head, device)

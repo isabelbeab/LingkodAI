@@ -1,7 +1,7 @@
 """LingkodAI CPU demo (Streamlit). No torch imports anywhere in this file or
 anything it imports -- this is what makes the CPU image possible (image
 size about 600 MB, no CUDA, no model weights baked in). See
-docker/Dockerfile.cpu and README.md's "What ships" #2.
+docker/Dockerfile.cpu and README.md's "This repo contains" #2.
 
 What runs live in here, on CPU:
   - GlotLID text language identification (src/lid_text.py -- fastText, CPU

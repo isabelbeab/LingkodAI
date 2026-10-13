@@ -67,6 +67,24 @@ def write_turn_outputs(out_dir: Path, turn) -> None:
         sf.write(str(wav_path), turn.audio_out, turn.audio_out_sr)
 
 
+def write_conversation(out_dir: Path, result) -> None:
+    """Every turn's JSON and WAV, then manifest.json. The manifest is written
+    last, so its presence means the conversation finished writing
+    (scripts/run_folder.py relies on this to skip finished conversations)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for turn in result.turns:
+        write_turn_outputs(out_dir, turn)
+
+    manifest = {
+        "n_turns": len(result.turns),
+        "final_lang": result.routing.final_lang,
+        "was_overridden": result.routing.was_overridden,
+        "turn_files": [f"turn_{t.turn_idx}.json" for t in result.turns],
+    }
+    with open(out_dir / "manifest.json", "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, ensure_ascii=False)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--audio", nargs="+", required=True, help="one audio file per turn, in order")
@@ -117,18 +135,7 @@ def main() -> int:
         rag_data_dir=args.rag_data_dir,
     )
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    for turn in result.turns:
-        write_turn_outputs(args.out, turn)
-
-    manifest = {
-        "n_turns": len(result.turns),
-        "final_lang": result.routing.final_lang,
-        "was_overridden": result.routing.was_overridden,
-        "turn_files": [f"turn_{t.turn_idx}.json" for t in result.turns],
-    }
-    with open(args.out / "manifest.json", "w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2, ensure_ascii=False)
+    write_conversation(args.out, result)
 
     print(f"\nDone. final_lang={result.routing.final_lang}"
           f" (was_overridden={result.routing.was_overridden})")

@@ -359,3 +359,147 @@ but was not confirmed by listening. Known issue, not fixed: a guard that treats 
 segment reaching the cap as a TTS failure (text-only turn, the existing
 designed fallback) is a candidate follow-up, but it is a deviation from the
 source notebook and needs a GPU test.
+
+---
+
+## 2026-10-12 -- README "Start here" and automatic checks on GitHub
+
+**Issue:** At the Milestone 3.5 handover, a stakeholder reading the README
+asked:
+- what the terminal commands are for
+- whether the repo has to be cloned first
+- what "the config file" is and how to make one
+- what was actually tested
+- how anyone can be sure the Docker images work
+
+The meeting asked the README to cover setup, environment, data, the apps,
+input, output, configuration, and adding documents to the knowledge base.
+
+**Reason:** The README assumed a reader who already knew the project. It
+never said to clone the repo, mentioned `.env` only in passing, and did not
+describe the output files. Every check so far had also been run by hand.
+Nothing re-checked the repo when it changed, and the GPU image had been
+built only once, locally.
+
+**Decision:**
+- The README gains:
+  - a "Start here" path from a fresh machine to a first answer
+  - a table of every `.env` variable and where its value comes from
+  - data and model tables
+  - the input arguments and every output field
+  - how to run both apps
+  - a table of what has been verified, how and when
+- "Adding documents to the knowledge base" is a placeholder for the RAG
+  author, listing the loader's current constraints.
+- `.github/workflows/ci.yml` runs on every push and pull request:
+  - the pytest suite
+  - a build of the CPU image, which must then serve its page
+  - a build of the GPU image, which must then import every pipeline module
+- GitHub's runners have no GPU, so a passing run shows the code and both
+  images build and load, not that inference works. Running the golden check
+  inside the GPU image on a GPU Docker host is still open.
+
+---
+
+## 2026-10-12 -- Audio LID head loaded from Hugging Face
+
+**Issue:** The stakeholders' handover conditions ask for every model to come
+from Hugging Face. The audio LID head was the one model still committed to
+the repo, as `models/deeper_50chunks.pt`. The 2026-09-28 entry kept it there
+at the ASR/LID author's call, with the org repo as an archive.
+
+**Reason:** The ASR/LID author approved the move on 2026-10-12. The org copy
+had already been checked identical (the 2026-09-28 entry). It was checked
+again today with `scripts/compare_hf_repos.py`, and by downloading it and
+loading it into `build_head()`.
+
+**Decision:**
+- `src/lid_audio.py` downloads `deeper_50chunks.pt` from
+  `lingkodai/lingkodai-audio-lid-head`, pinned to commit `0ac45810`, and
+  refuses to load it unless its SHA-256 is
+  `101c32f02a254a1596617d44a98c9eccbc0f761862232b787ddf31e2b066dc99`. That
+  is the committed file's hash, so the weights the pipeline loads have not
+  changed.
+- `LID_HEAD` still overrides it with a local file.
+- `models/` is removed, along with its `COPY` in `docker/Dockerfile.gpu` and
+  its exceptions in `.dockerignore` and `.gitignore`.
+- The `HF_TOKEN` scope gains this fifth repo.
+- `scripts/compare_hf_repos.py` now checks the org file against the
+  recorded hash instead of the deleted local copy.
+- The file stays in git history. Removing it from history would mean
+  rewriting `main`'s history, and nothing requires that.
+
+---
+
+## 2026-10-12 -- Running a folder of your own recordings
+
+**Issue:** The README explained the golden check and a single
+`run_conversation.py --audio FILE` call. It had no simple way to run a batch
+of your own pre-recorded questions and find the answers, which is what a new
+user tries first.
+
+**Reason:** Typing every file path, and then opening one folder per
+conversation to read the answers, is a barrier for anyone who is not an
+engineer.
+
+**Decision:**
+- `scripts/run_folder.py` runs everything in `input/` and writes to
+  `output/`:
+  - An audio file is a one-question conversation.
+  - A subfolder is a multi-turn conversation, with its turns in filename
+    order.
+  - Each conversation gets the same output as `run_conversation.py`, plus
+    `output/summary.csv` with one row per question.
+  - Finished conversations are skipped on a rerun.
+  - A failure is recorded in the summary and does not stop the others.
+- It reuses `pipeline.run_staged` unchanged. Each conversation therefore
+  loads the models again. Loading them once for the whole folder would
+  change `src/pipeline.py`, and is left until the cost is measured on a GPU.
+- `notebooks/colab_run_folder.ipynb` does the same with the Drive folders
+  `lingkodai_input` and `lingkodai_output`.
+- `input/` (apart from its README) and `output/` are gitignored and
+  dockerignored.
+- Tested with a fake pipeline (`tests/test_run_folder.py`), then run for
+  real on 2026-10-12 with `notebooks/colab_run_folder.ipynb` on a Colab L4,
+  from branch `stakeholder-readme-ci` at `c25f163`:
+  - Input: one single question (`ta_prc_q1.ogg`) and one 2-turn subfolder
+    (`2-turn/`), all Cebuano recordings made by the team.
+  - All 3 questions: `final_lang` ceb, status ok, audio written. A team member
+    listened and judged the audio clear.
+  - 344 s for the 2-turn conversation, 422 s for the single question; most
+    of it is model loading, paid once per conversation.
+  - The audio LID head loaded from the `lingkodai` org repo with no error.
+- Answer-quality notes from that run, for the RAG author. Neither comes
+  from `run_folder.py`; `src/rag.py` passes the model's text through as the
+  source notebook does:
+  - "unsáon pagsketúl ug apóintment" (schedule an appointment) got the
+    no-match fallback. Either the knowledge base has no matching chunk or
+    retrieval missed it.
+  - "unsáon pag-renew ug lisúnsya" (renew a license) got a correct answer,
+    but the generator's reasoning about the candidate documents came out in
+    front of it ("Ang tukma nga tubag mao: ..."), and TTS spoke all of it.
+
+---
+
+## 2026-10-13 -- DS6 defined in the README; name kept
+
+**Issue:** "DS6" appears across the README, scripts and file names without
+ever being defined, so a new reader meets it out of nowhere. A plainer name
+such as `test_dataset` was considered.
+
+**Reason:** Renaming touches 21 tracked files, about 130 mentions. Some of
+them cannot change:
+- the vendored TTS frontend, which is never edited
+- the frozen `data/init_set_ds6.json`, which records its source file's name
+- this file's history
+The file itself is `golden/DS6_augmented.xlsx` in the private eval-assets
+repo, listed in its `MANIFEST.sha256`. `scripts/fetch_eval_assets.py`
+checks for that exact path, so renaming the file there would make every
+existing copy of the script fail its check at once. The golden check
+only runs on a GPU, so the automatic checks would not catch a reference
+that was missed.
+
+**Decision:** Keep the name. The README gains "The test dataset (DS6)",
+under Data and models: what DS6 is, how it was made, what the `_augmented`
+file adds, where this repo uses it, and what DS7 is. The README's DS6
+mentions link to it.

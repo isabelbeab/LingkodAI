@@ -227,11 +227,16 @@ __marimo__/
 *.xlsx
 *.csv
 
-# No blanket *.pt: models/deeper_50chunks.pt is tracked on purpose.
+# No blanket *.pt rule; no model weights are tracked (all on Hugging Face).
 
 # --- e2e integration ---
 reference/
 outputs/
+# scripts/run_folder.py: your recordings and their results never go into git.
+# Only input/README.md is tracked, so the folder exists on a fresh clone.
+input/*
+!input/README.md
+output/
 # demo_audio/ contents are cloned-voice audio (research-only licence); only
 # .gitkeep is tracked so the CPU Dockerfile's COPY works on a fresh clone.
 demo_audio/*
