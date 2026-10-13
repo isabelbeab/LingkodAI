@@ -302,11 +302,11 @@ history all use it.
 
 How it was made:
 
-1. **Scripts.** The team wrote 96 multi-turn conversations about PRC
-   services, 7 or 8 questions each, in Cebuano, Filipino and English. They
-   are synthetic: the questions were written for testing, not collected
-   from real PRC enquiries. A conversation keeps the same ID in all three
-   languages (`CONV-MT-001` to `CONV-MT-096`).
+1. **Scripts.** The team generated 96 multi-turn conversations about PRC
+   services with a large language model (LLM), 7 or 8 questions each, in
+   Cebuano, Filipino and English. They are synthetic: generated for
+   testing, not collected from real PRC enquiries. A conversation keeps the
+   same ID in all three languages (`CONV-MT-001` to `CONV-MT-096`).
 2. **Recordings.** Native speakers of each language, friends of the team
    and other volunteers, read the questions aloud: 96 conversations in each
    language, 2,235 recordings in all.
