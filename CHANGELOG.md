@@ -464,8 +464,8 @@ engineer.
   from branch `stakeholder-readme-ci` at `c25f163`:
   - Input: one single question (`ta_prc_q1.ogg`) and one 2-turn subfolder
     (`2-turn/`), all Cebuano recordings made by the team.
-  - All 3 questions: `final_lang` ceb, status ok, audio written. HK listened
-    and judged the audio clear.
+  - All 3 questions: `final_lang` ceb, status ok, audio written. A team member
+    listened and judged the audio clear.
   - 344 s for the 2-turn conversation, 422 s for the single question; most
     of it is model loading, paid once per conversation.
   - The audio LID head loaded from the `lingkodai` org repo with no error.

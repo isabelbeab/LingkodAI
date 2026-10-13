@@ -17,8 +17,8 @@ decisions that took discussion, in the order they were made.
 
 ## Contents
 
-- [Pipeline stages](#pipeline-stages) and [What ships](#what-ships)
-- [Start here: from zero to a first answer](#start-here-from-zero-to-a-first-answer)
+- [Pipeline stages](#pipeline-stages) and [This repo contains](#this-repo-contains)
+- [IMPORTANT: Start here](#important-start-here)
 - [Running your own recordings (`input/` and `output/`)](#running-your-own-recordings-input-and-output)
 - [Configure: the `.env` file](#configure-the-env-file)
 - [Data and models](#data-and-models)
@@ -49,7 +49,7 @@ Every turn runs through, in order:
 Language identification runs once per conversation, at turn 1, and is then
 locked for every later turn -- not re-decided per turn.
 
-## What ships
+## This repo contains
 
 Three artifacts, all built from this one repo:
 
@@ -67,7 +67,7 @@ Three artifacts, all built from this one repo:
    JupyterHub and cannot run Docker), and on Colab through
    `notebooks/colab_golden_check.ipynb`.
 
-## Start here: from zero to a first answer
+## IMPORTANT: Start here
 
 The grey boxes in this README are commands typed into a terminal (bash, on
 Linux or macOS; WSL on Windows). There is no installer or app to download:
@@ -77,16 +77,16 @@ answers as text (JSON) and speech (WAV). To process many recordings at once,
 drop them in `input/` and run `scripts/run_folder.py`; the results appear in
 `output/` (see [Running your own recordings](#running-your-own-recordings-input-and-output)).
 
-### Pick a route
+### Options / Routes
 
 | Route | You need | Use it to |
 |---|---|---|
 | **Colab: your recordings** | A Google account with a GPU runtime, and a Hugging Face token (below) | Run your own recordings with no local setup: open `notebooks/colab_run_folder.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_run_folder.ipynb)), choose an L4 GPU, add the token as a Colab Secret named `HF_TOKEN`, put recordings in the Google Drive folder `lingkodai_input`, and run the cells. Results land in the Drive folder `lingkodai_output` |
 | **Colab: evaluated results** | The same | Reproduce the evaluated results: open `notebooks/colab_golden_check.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb)) the same way and run the cells |
-| **Your own GPU machine** | Everything in "What you need" below | Run the pipeline on your own audio, or call it from other software |
+| **Your own GPU machine** | Everything in "Requirements" below | Run the pipeline on your own audio, or call it from other software |
 | **CPU demo only** | Docker, or Python 3.12 | Show recorded conversations and the live text frontend, with no GPU or token. See [Running the CPU demo locally](#running-the-cpu-demo-locally) |
 
-### What you need (own GPU machine)
+### Requirements (What you need)
 
 - Linux with an NVIDIA GPU of **11 GB or more** and a working driver
   (`nvidia-smi` shows the card). The pipeline was verified on an RTX 2080 Ti
@@ -102,7 +102,7 @@ drop them in `input/` and run `scripts/run_folder.py`; the results appear in
   `lingkodai/lingkodai-whisper-eng`, `lingkodai/lingkodai-audio-lid-head`
   and `lingkodai/lingkodai-eval-assets`.
 
-### Step by step
+### Step by step process
 
 1. **Get the code.** Everything below runs from inside this folder.
 
@@ -167,7 +167,7 @@ running anything.
 
 For your own recordings, no file paths to type: put them in the `input/`
 folder and run one command. After the setup in
-[Start here](#start-here-from-zero-to-a-first-answer):
+[Start here](#important-start-here):
 
 1. **Put recordings in `input/`.**
    - An audio file directly in `input/` is a one-question conversation.
@@ -241,7 +241,7 @@ the code reads `.env` by itself: load it into each new terminal with
 
 | Variable | Needed for | Where the value comes from |
 |---|---|---|
-| `HF_TOKEN` | Full pipeline, setup scripts | Your fine-grained read-only Hugging Face token (see "What you need") |
+| `HF_TOKEN` | Full pipeline, setup scripts | Your fine-grained read-only Hugging Face token (see [Requirements](#requirements-what-you-need)) |
 | `ASR_CEB`, `ASR_FIL`, `ASR_ENG` | Full pipeline | Printed by `scripts/patch_asr_tokenizers.py`. Leave them commented out until then: an empty value breaks loading |
 | `TTS_REF_DIR` | Speech output (stage 7) | Printed by `scripts/fetch_eval_assets.py` |
 | `APP_PASSWORD` | CPU demo page | Your choice. The page refuses to start without it |
@@ -402,7 +402,7 @@ them; the tab just says so.
 
 ### Running the live GPU demo
 
-After the full setup ([Start here](#start-here-from-zero-to-a-first-answer)):
+After the full setup ([Start here](#important-start-here)):
 
 ```bash
 pip install -e ".[gpu,app]"
