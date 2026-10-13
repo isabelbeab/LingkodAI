@@ -122,9 +122,10 @@ drop them in `input/` and run `scripts/run_folder.py`; the results appear in
    pip install -e ".[gpu]"
    ```
 
-3. **Create your configuration file, `.env`,** from the template, and put
-   your token on the `HF_TOKEN=` line. [Configure](#configure-the-env-file)
-   explains every line.
+3. **Create your configuration file, `.env`,** from the template,
+   `.env.example`, and put your token on the `HF_TOKEN=` line. The template
+   is in this folder but hidden (`ls -a` shows it; see
+   [Configure](#configure-the-env-file), which also explains every line).
 
    ```bash
    cp .env.example .env
@@ -233,10 +234,18 @@ into `demo_audio/`.
 
 `.env` is the repo's configuration file: one `NAME=value` per line, read by
 the scripts as environment variables. Create it with
-`cp .env.example .env`; the template explains every line. `.env` holds your
-token, so it is gitignored and must never be committed or shared. Nothing in
-the code reads `.env` by itself: load it into each new terminal with
-`set -a; source .env; set +a`. The Docker images take it with
+`cp .env.example .env`; the template explains every line.
+
+The template, `.env.example`, is in the repo's top folder, next to this
+README. A name that starts with a dot marks a hidden file on Linux and
+macOS, so `ls` and most file browsers do not show it, and your `.env` will
+be hidden the same way. `ls -a` lists them, as does turning on hidden files
+in a file browser (Ctrl+H in most Linux file managers, Cmd+Shift+. in the
+macOS Finder). GitHub's file list shows `.env.example` normally.
+
+`.env` holds your token, so it is gitignored and must never be committed or
+shared. Nothing in the code reads `.env` by itself: load it into each new
+terminal with `set -a; source .env; set +a`. The Docker images take it with
 `--env-file .env` instead.
 
 | Variable | Needed for | Where the value comes from |
@@ -283,12 +292,56 @@ Licences: NLLB-200 is CC-BY-NC-4.0 and the TTS reference voices are CC-BY-NC
 (below), so the system as built is for non-commercial research use. Check
 each model card before any other use.
 
+### The test dataset (DS6)
+
+"DS6" appears throughout this repo, in file names, the golden check and
+`CHANGELOG.md`. It is the dataset the pipeline was evaluated on. The name is
+the team's internal one: it was the sixth dataset in the TTS author's
+numbering. It is kept because the code, the file names and the recorded
+history all use it.
+
+How it was made:
+
+1. **Scripts.** The team wrote 96 multi-turn conversations about PRC
+   services, 7 or 8 questions each, in Cebuano, Filipino and English. They
+   are synthetic: the questions were written for testing, not collected
+   from real PRC enquiries. A conversation keeps the same ID in all three
+   languages (`CONV-MT-001` to `CONV-MT-096`).
+2. **Recordings.** Native speakers of each language, friends of the team
+   and other volunteers, read the questions aloud: 96 conversations in each
+   language, 2,235 recordings in all.
+3. **The run.** Every recording went through the full pipeline in Scenario 2
+   (language identification on), one stage at a time across the whole
+   dataset, in the stage order [`staged` mode](#execution-modes) follows.
+   DS6 is the record of that run: one row per recording, with its true
+   language, the reference transcript and answer, what every stage
+   produced (detected language, transcript, English question, chunks
+   retrieved, English answer, translated answer), timings and evaluation
+   scores.
+
+`DS6_augmented.xlsx` is that table with extra columns the TTS author added
+later for the speech evaluation (speech-quality and round-trip scores, and
+the text as the TTS spoke it). The columns this repo reads are the original
+run's. The file is in the private eval assets (below).
+
+DS6 is used here in two places:
+
+- The golden check reruns one DS6 conversation, `CONV-MT-001`, in all three
+  languages (24 recordings) and compares every field with DS6's rows. See
+  [The golden check](#the-golden-check).
+- `data/init_set_ds6.json`, the frozen list of acronyms the TTS spells out,
+  was built from DS6's answers.
+
+DS7 is the same 2,235 recordings run in Scenario 1, with language
+identification off. This repo implements Scenario 2 only; DS7 appears here
+only as `data/init_set_ds7.json` and in `CHANGELOG.md`.
+
 ### Data in this repo
 
 | Path | What it is |
 |---|---|
 | `data/prc_chunks/` | The RAG knowledge base: 13 `*_chunks.json` files, 547 chunks. See [Adding documents](#adding-documents-to-the-knowledge-base) |
-| `data/init_set_ds6.json` | The frozen set of acronyms the TTS spells out letter by letter, built once by `scripts/build_init_set.py` and never derived at run time. `init_set_ds7.json` and `init_set_live.json` are the DS7 set and the union of both |
+| `data/init_set_ds6.json` | The frozen set of acronyms the TTS spells out letter by letter, built once by `scripts/build_init_set.py` from [DS6](#the-test-dataset-ds6)'s answers and never derived at run time. `init_set_ds7.json` and `init_set_live.json` are the DS7 set and the union of both |
 | `demo_audio/` | Empty except `.gitkeep`: recorded conversations for the CPU demo go here |
 
 ### Private data (Hugging Face dataset `lingkodai/lingkodai-eval-assets`)
@@ -299,8 +352,8 @@ Files that cannot live in a public repo, downloaded and checksum-verified by
 - `tts_ref/`: the three TTS reference voices, Philippine Languages Database
   speaker audio under a CC-BY-NC, research-only licence. Do not
   redistribute them.
-- `golden/DS6_augmented.xlsx`: the evaluated Scenario 2 run (2,235 rows), the
-  reference for the golden check.
+- `golden/DS6_augmented.xlsx`: [DS6](#the-test-dataset-ds6), the evaluated
+  Scenario 2 run (2,235 rows), the reference for the golden check.
 - `golden/audio/`: the golden conversation `CONV-MT-001` in all three
   languages, 24 recordings.
 - `MANIFEST.sha256`: a checksum for every file.
@@ -443,9 +496,10 @@ The full model set does not fit together on an 11GB GPU (NLLB-3.3B fp16
 alone is 6.7GB; Qwen3-TTS-1.7B fp32 takes most of what's left). Two modes:
 
 - **`staged`** (default, for an 11GB card, e.g. JOJIE): phase-major over a
-  whole scripted conversation, the way the evaluated DS6 run was produced.
-  Each phase loads its models once, processes every turn, then frees them
-  (`del`, `gc.collect()`, `torch.cuda.empty_cache()`):
+  whole scripted conversation, the way the evaluated
+  [DS6](#the-test-dataset-ds6) run was produced. Each phase loads its
+  models once, processes every turn, then frees them (`del`,
+  `gc.collect()`, `torch.cuda.empty_cache()`):
   1. audio LID and text LID on the first turn, ASR on all turns, routing
   2. MT in, all turns
   3. RAG, turn by turn in order (follow-up rewriting needs earlier English
@@ -586,10 +640,11 @@ failed; the Actions tab shows which step, with its log.
 The acceptance test is the golden check: three real conversations (one per
 language, same source audio) run through the full pipeline on a GPU and
 compared against `DS6_augmented.xlsx`, the evaluated Scenario 2 reference
-run. It needs the GPU setup above, including both one-time steps. The audio
-paths recorded in DS6 are absolute JOJIE paths, so `--audio-root-map`
-remaps them onto the downloaded copy; `scripts/fetch_eval_assets.py` prints
-the full command with the right paths filled in:
+run ([DS6](#the-test-dataset-ds6)). It needs the GPU setup above, including
+both one-time steps. The audio paths recorded in DS6 are absolute JOJIE
+paths, so `--audio-root-map` remaps them onto the downloaded copy;
+`scripts/fetch_eval_assets.py` prints the full command with the right paths
+filled in:
 
 ```bash
 python scripts/golden_check.py \

@@ -478,3 +478,28 @@ engineer.
   - "unsáon pag-renew ug lisúnsya" (renew a license) got a correct answer,
     but the generator's reasoning about the candidate documents came out in
     front of it ("Ang tukma nga tubag mao: ..."), and TTS spoke all of it.
+
+---
+
+## 2026-10-13 -- DS6 defined in the README; name kept
+
+**Issue:** "DS6" appears across the README, scripts and file names without
+ever being defined, so a new reader meets it out of nowhere. A plainer name
+such as `test_dataset` was considered.
+
+**Reason:** Renaming touches 21 tracked files, about 130 mentions. Some of
+them cannot change:
+- the vendored TTS frontend, which is never edited
+- the frozen `data/init_set_ds6.json`, which records its source file's name
+- this file's history
+The file itself is `golden/DS6_augmented.xlsx` in the private eval-assets
+repo, listed in its `MANIFEST.sha256`. `scripts/fetch_eval_assets.py`
+checks for that exact path, so renaming the file there would make every
+existing copy of the script fail its check at once. The golden check
+only runs on a GPU, so the automatic checks would not catch a reference
+that was missed.
+
+**Decision:** Keep the name. The README gains "The test dataset (DS6)",
+under Data and models: what DS6 is, how it was made, what the `_augmented`
+file adds, where this repo uses it, and what DS7 is. The README's DS6
+mentions link to it.
