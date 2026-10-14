@@ -103,49 +103,84 @@ def write_chunk_file(path, chunks):
 # --- load_chunks -------------------------------------------------------
 
 
-def test_load_chunks_happy_path(tmp_path):
-    write_chunk_file(
-        tmp_path / "alpha_chunks.json",
-        [{"chunk_id": "a1", "chunk_title": "A", "retrieval_text": "rt", "full_entry_text": "fe"}],
-    )
-    write_chunk_file(
-        tmp_path / "beta_chunks.json",
-        [
-            {"chunk_id": "b1", "chunk_title": "B1", "retrieval_text": "rt", "full_entry_text": "fe"},
-            {"chunk_id": "b2", "chunk_title": "B2", "retrieval_text": "rt", "full_entry_text": "fe"},
-        ],
-    )
-    chunks = rag.load_chunks(tmp_path, expected_files=2, expected_total=3)
-    assert len(chunks) == 3
-    assert {c["chunk_id"] for c in chunks} == {"a1", "b1", "b2"}
+def chunk(chunk_id, **extra):
+    return {"chunk_id": chunk_id, "chunk_title": "T", "retrieval_text": "rt", "full_entry_text": "fe", **extra}
 
 
-def test_load_chunks_wrong_file_count_raises(tmp_path):
-    write_chunk_file(tmp_path / "alpha_chunks.json", [{"chunk_id": "a1"}])
-    with pytest.raises(RuntimeError, match="Expected 2 chunk files"):
-        rag.load_chunks(tmp_path, expected_files=2, expected_total=1)
+def test_load_chunks_happy_path(tmp_path, capsys):
+    write_chunk_file(tmp_path / "alpha_chunks.json", [chunk("a1")])
+    write_chunk_file(tmp_path / "beta_chunks.json", [chunk("b1"), chunk("b2", doc_type="faq")])
+    chunks = rag.load_chunks(tmp_path)
+    assert [c["chunk_id"] for c in chunks] == ["a1", "b1", "b2"]
+    out = capsys.readouterr().out
+    assert "3 chunks across 2 files" in out
+    assert "NOTE: the evaluated knowledge base had 13 files and 547 chunks" in out
 
 
-def test_load_chunks_wrong_total_raises(tmp_path):
-    write_chunk_file(tmp_path / "alpha_chunks.json", [{"chunk_id": "a1"}])
-    with pytest.raises(RuntimeError, match="Expected 5 total chunks"):
-        rag.load_chunks(tmp_path, expected_files=1, expected_total=5)
+def test_load_chunks_count_is_dynamic(tmp_path):
+    # Adding a document needs no code change: any number of files loads.
+    for n in range(5):
+        write_chunk_file(tmp_path / f"doc{n}_chunks.json", [chunk(f"d{n}")])
+    assert len(rag.load_chunks(tmp_path)) == 5
+
+
+def test_load_chunks_ignores_non_json_files(tmp_path):
+    write_chunk_file(tmp_path / "alpha_chunks.json", [chunk("a1")])
+    (tmp_path / "README.md").write_text("notes")
+    assert len(rag.load_chunks(tmp_path)) == 1
+
+
+def test_load_chunks_missing_folder_raises(tmp_path):
+    with pytest.raises(RuntimeError, match="Knowledge-base folder not found"):
+        rag.load_chunks(tmp_path / "nope")
+
+
+def test_load_chunks_empty_folder_raises(tmp_path):
+    with pytest.raises(RuntimeError, match="No \\*_chunks.json files"):
+        rag.load_chunks(tmp_path)
+
+
+def test_load_chunks_download_suffix_raises(tmp_path):
+    # "beta_chunks (1).json" does not end in "_chunks.json". The glob would
+    # skip it and drop a document unnoticed, so the loader refuses instead.
+    write_chunk_file(tmp_path / "alpha_chunks.json", [chunk("a1")])
+    write_chunk_file(tmp_path / "beta_chunks (1).json", [chunk("b1")])
+    with pytest.raises(RuntimeError, match=r"beta_chunks \(1\)\.json"):
+        rag.load_chunks(tmp_path)
+
+
+def test_load_chunks_invalid_json_raises(tmp_path):
+    (tmp_path / "alpha_chunks.json").write_text("[{")
+    with pytest.raises(RuntimeError, match="alpha_chunks.json is not valid JSON"):
+        rag.load_chunks(tmp_path)
+
+
+@pytest.mark.parametrize("content", [{"chunk_id": "a1"}, [], ["text"]])
+def test_load_chunks_not_a_list_of_objects_raises(tmp_path, content):
+    write_chunk_file(tmp_path / "alpha_chunks.json", content)
+    with pytest.raises(RuntimeError, match="alpha_chunks.json"):
+        rag.load_chunks(tmp_path)
+
+
+def test_load_chunks_missing_required_field_raises(tmp_path):
+    bad = chunk("a2")
+    del bad["full_entry_text"]
+    write_chunk_file(tmp_path / "alpha_chunks.json", [chunk("a1"), bad])
+    with pytest.raises(RuntimeError, match=r"chunk 1 \(a2\) is missing \['full_entry_text'\]"):
+        rag.load_chunks(tmp_path)
 
 
 def test_load_chunks_duplicate_id_raises(tmp_path):
-    write_chunk_file(tmp_path / "alpha_chunks.json", [{"chunk_id": "dup"}])
-    write_chunk_file(tmp_path / "beta_chunks.json", [{"chunk_id": "dup"}])
+    write_chunk_file(tmp_path / "alpha_chunks.json", [chunk("dup")])
+    write_chunk_file(tmp_path / "beta_chunks.json", [chunk("dup")])
     with pytest.raises(RuntimeError, match="Duplicate chunk_id"):
-        rag.load_chunks(tmp_path, expected_files=2, expected_total=2)
+        rag.load_chunks(tmp_path)
 
 
-def test_load_chunks_skips_files_with_download_suffix(tmp_path):
-    # "beta_chunks (1).json" does not end in "_chunks.json", so the glob
-    # silently skips it -- download suffixes must be stripped before loading.
-    write_chunk_file(tmp_path / "alpha_chunks.json", [{"chunk_id": "a1"}])
-    write_chunk_file(tmp_path / "beta_chunks (1).json", [{"chunk_id": "b1"}])
-    with pytest.raises(RuntimeError, match="Expected 2 chunk files"):
-        rag.load_chunks(tmp_path, expected_files=2, expected_total=2)
+def test_repo_knowledge_base_loads():
+    # The shipped data/prc_chunks/ passes every check. No counts are pinned
+    # here, so adding a document does not mean editing this test.
+    assert rag.load_chunks()
 
 
 # --- bm25_weight_matrix ------------------------------------------------

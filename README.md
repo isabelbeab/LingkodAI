@@ -340,7 +340,7 @@ only as `data/init_set_ds7.json` and in `CHANGELOG.md`.
 
 | Path | What it is |
 |---|---|
-| `data/prc_chunks/` | The RAG knowledge base: 13 `*_chunks.json` files, 547 chunks. See [Adding documents](#adding-documents-to-the-knowledge-base) |
+| `data/prc_chunks/` | The RAG knowledge base: 13 `*_chunks.json` files, 547 chunks as evaluated; the loader takes however many files it holds. See [Adding documents](#adding-documents-to-the-knowledge-base) |
 | `data/init_set_ds6.json` | The frozen set of acronyms the TTS spells out letter by letter, built once by `scripts/build_init_set.py` from [DS6](#the-test-dataset-ds6)'s answers and never derived at run time. `init_set_ds7.json` and `init_set_live.json` are the DS7 set and the union of both |
 | `demo_audio/` | Empty except `.gitkeep`: recorded conversations for the CPU demo go here |
 
@@ -539,13 +539,14 @@ given that the search index is built in memory.
 with an error rather than guess:
 
 - It reads every file named `*_chunks.json` in `data/prc_chunks/` (or
-  `RAG_CHUNKS_DIR`). A file named anything else, such as
-  `new_chunks (2).json` from a browser download, is silently skipped.
-- Each file is one JSON list of chunk objects.
-- It refuses to start unless it finds exactly 13 files and 547 chunks
-  (`EXPECTED_CHUNK_FILES` and `EXPECTED_TOTAL_CHUNKS` near the top of
-  `src/rag.py`). Adding a document means updating both numbers in the same
-  change; until then every run stops when the RAG stage loads.
+  `RAG_CHUNKS_DIR`), however many there are. Adding a document needs no
+  code change.
+- Any other `.json` file in the folder stops the run with an error naming
+  it. A browser download often renames a file to something like
+  `new_chunks (2).json`; rename it to end in `_chunks.json` (here
+  `new_chunks.json`). Files that are not `.json`, such as notes, are
+  ignored.
+- Each file is one JSON list of chunk objects, and not empty.
 - Every `chunk_id` must be unique across all the files.
 - The code reads four fields, and every chunk needs all of them:
   `chunk_id`, `chunk_title`, `retrieval_text` and `full_entry_text`. It
@@ -553,8 +554,18 @@ with an error rather than guess:
   (the Citizen's Charter entries) and adds them to the answer prompt as the
   official totals. Every other field is there for people and is not read by
   the code, so a missing or extra one does not break loading.
-- To check that a new document is found, ask a question it answers and look
-  for its `chunk_id` in that turn's `chunk_ids` [output field](#output).
+- It prints each file with its number of chunks, then the total. When the
+  totals are not the evaluated knowledge base's (13 files, 547 chunks), it
+  also prints a note that answers may differ from [DS6](#the-test-dataset-ds6).
+
+After adding a document:
+
+- To check that it is found, ask a question it answers and look for its
+  `chunk_id` in that turn's `chunk_ids` [output field](#output).
+- `pytest tests/test_rag.py` runs the same checks on `data/prc_chunks/`
+  without loading any model.
+- The GPU Docker image copies `data/prc_chunks/` when it is built, so
+  rebuild it to include the new document.
 - New documents are a change from the evaluated knowledge base: record them
   in `CHANGELOG.md`, and expect golden-check answers that cite them to
   differ from DS6.

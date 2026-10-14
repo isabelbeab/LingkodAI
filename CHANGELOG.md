@@ -513,10 +513,7 @@ placeholder (2026-10-12 entry). The RAG author sent their write-up as a
 Word document.
 
 **Reason:** It is the RAG author's method (how documents were extracted,
-chunked, reviewed and formatted), so it goes in as they wrote it. It does
-not mention the loader's file and chunk counts. Without them, a reader who
-adds a file as described would find every run stopping when the RAG stage
-loads.
+chunked, reviewed and formatted), so it goes in as they wrote it.
 
 **Decision:** The README section now holds the RAG author's text with
 formatting changes only:
@@ -527,11 +524,52 @@ formatting changes only:
 - the folder written as `data/prc_chunks/` (the document had
   `/data/prc_chunks`)
 
-Under it, "What the code checks when it loads the files" keeps the loader
-facts from the placeholder, plus three more:
+Under it, "What the code checks when it loads the files" lists the
+loader's checks (see the next entry), plus:
 - which fields `src/rag.py` actually reads
-- that each file is one JSON list
 - how to check that a new document is retrieved (its `chunk_id` in the
   turn's `chunk_ids`)
 
 The Word file was not committed.
+
+---
+
+## 2026-10-14 -- Knowledge-base loader counts the files instead of expecting 13 and 547
+
+**Issue:** The RAG author asked whether the loader's fixed counts could be
+dynamic. `src/rag.py` refused to start unless `data/prc_chunks/` held
+exactly 13 files and 547 chunks, so adding a document meant editing two
+numbers in the code. It also meant `--rag-data-dir`, documented as "a
+different knowledge-base folder", only worked for a folder with those
+exact counts.
+
+**Reason:** The fixed counts were added during the port; the source notebook
+listed its 13 files by name and only printed the total. They guarded
+against one trap: a browser download renames `charter_chunks.json` to
+`charter_chunks (7).json`, the `*_chunks.json` glob skips it, and a
+document drops out of the knowledge base unnoticed. That trap can be
+caught by name instead.
+
+**Decision:** `load_chunks` loads every `*_chunks.json`, however many, and
+stops with a clear error on:
+- any other `.json` file in the folder (the download trap)
+- a missing folder, or no chunk files
+- a file that is not valid JSON, or not a non-empty list of objects
+- a chunk missing `chunk_id`, `chunk_title`, `retrieval_text` or
+  `full_entry_text`, the four fields the code always reads
+- a duplicate `chunk_id` (as before)
+
+It prints each file with its chunk count, then the total, and a note when
+the totals differ from the evaluated knowledge base (13 files, 547 chunks,
+kept as `EVALUATED_CHUNK_FILES` and `EVALUATED_TOTAL_CHUNKS`). A test now
+runs these checks on the repo's own `data/prc_chunks/`, without pinning
+counts.
+
+What is given up: a file deleted by accident no longer stops the run. The
+printed file list shows it, and git shows a deleted file in `git status`
+and in a pull request.
+
+Answers do not change. On the current 13 files the new loader returns the
+same 547 chunks in the same order as the old one (compared directly,
+2026-10-14), so the search index is built from identical input. No GPU
+re-run is needed for this change.
