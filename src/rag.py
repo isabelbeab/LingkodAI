@@ -27,8 +27,13 @@ DATA_DIR = os.environ.get(
     "RAG_CHUNKS_DIR",
     str(Path(__file__).resolve().parents[1] / "data" / "prc_chunks"),
 )
-EXPECTED_CHUNK_FILES = 13
-EXPECTED_TOTAL_CHUNKS = 547
+# The knowledge base the DS6 run was evaluated on. Not enforced: the loader
+# takes whatever *_chunks.json files the folder holds and prints a notice when
+# the counts differ, so adding a document needs no code change.
+EVALUATED_CHUNK_FILES = 13
+EVALUATED_TOTAL_CHUNKS = 547
+# The only chunk fields the code reads unconditionally; every chunk needs all four.
+REQUIRED_CHUNK_FIELDS = ("chunk_id", "chunk_title", "retrieval_text", "full_entry_text")
 
 HARRIER_MODEL = "microsoft/harrier-oss-v1-0.6b"
 HARRIER_TASK = "Retrieve relevant passages that answer the query"
@@ -110,37 +115,67 @@ class RAGBundle:
             torch.cuda.empty_cache()
 
 
-def load_chunks(
-    data_dir: str | Path | None = None,
-    expected_files: int = EXPECTED_CHUNK_FILES,
-    expected_total: int = EXPECTED_TOTAL_CHUNKS,
-) -> list[dict]:
-    """Load and combine all PRC chunk files, asserting the expected shape.
+def load_chunks(data_dir: str | Path | None = None) -> list[dict]:
+    """Load and combine every PRC chunk file in data_dir, however many there are.
 
-    Globs `*_chunks.json` under data_dir. Filenames must already have any
-    download suffix stripped (e.g. `charter_chunks (7).json` ->
-    `charter_chunks.json`), or the glob silently skips them.
+    Globs `*_chunks.json` under data_dir, in sorted order. Any other `.json`
+    file in the folder raises instead of being skipped: a browser download
+    suffix (`charter_chunks (7).json`) would otherwise drop a document from
+    the knowledge base without a word. Also raises on a file that is not a
+    JSON list of chunk objects, a chunk missing a REQUIRED_CHUNK_FIELDS
+    field, and a chunk_id that appears more than once.
     """
     data_dir = Path(data_dir) if data_dir is not None else Path(DATA_DIR)
-    paths = sorted(data_dir.glob("*_chunks.json"))
-    if len(paths) != expected_files:
+    if not data_dir.is_dir():
+        raise RuntimeError(f"Knowledge-base folder not found: {data_dir}")
+
+    stray = sorted(p.name for p in data_dir.glob("*.json") if not p.name.endswith("_chunks.json"))
+    if stray:
         raise RuntimeError(
-            f"Expected {expected_files} chunk files under {data_dir}, found {len(paths)}: "
-            f"{[p.name for p in paths]}"
+            f"{data_dir} holds .json file(s) whose names do not end in _chunks.json, "
+            f"so they would be skipped: {stray}. Rename each to end in _chunks.json "
+            "(e.g. `charter_chunks (7).json` -> `charter_chunks.json`) or move it out."
         )
 
-    chunks: list[dict] = []
-    for path in paths:
-        with open(path) as f:
-            chunks.extend(json.load(f))
+    paths = sorted(data_dir.glob("*_chunks.json"))
+    if not paths:
+        raise RuntimeError(f"No *_chunks.json files under {data_dir}")
 
-    if len(chunks) != expected_total:
-        raise RuntimeError(f"Expected {expected_total} total chunks, found {len(chunks)}")
+    chunks: list[dict] = []
+    counts: list[tuple[str, int]] = []
+    for path in paths:
+        try:
+            with open(path) as f:
+                doc_chunks = json.load(f)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"{path} is not valid JSON: {e}") from e
+        if not isinstance(doc_chunks, list) or not doc_chunks:
+            raise RuntimeError(f"{path} must be a non-empty JSON list of chunk objects")
+        for i, c in enumerate(doc_chunks):
+            if not isinstance(c, dict):
+                raise RuntimeError(f"{path.name}: item {i} is not a JSON object")
+            missing = [k for k in REQUIRED_CHUNK_FIELDS if k not in c]
+            if missing:
+                raise RuntimeError(
+                    f"{path.name}: chunk {i} ({c.get('chunk_id', 'no chunk_id')}) "
+                    f"is missing {missing}"
+                )
+        chunks.extend(doc_chunks)
+        counts.append((path.name, len(doc_chunks)))
 
     ids = [c["chunk_id"] for c in chunks]
     duplicates = {cid for cid in ids if ids.count(cid) > 1}
     if duplicates:
         raise RuntimeError(f"Duplicate chunk_id(s) across documents: {duplicates}")
+
+    print(f"  [rag] knowledge base {data_dir}: {len(chunks)} chunks across {len(paths)} files")
+    for name, n in counts:
+        print(f"  [rag]   {n:>4} chunks  <-  {name}")
+    if (len(paths), len(chunks)) != (EVALUATED_CHUNK_FILES, EVALUATED_TOTAL_CHUNKS):
+        print(
+            f"  [rag] NOTE: the evaluated knowledge base had {EVALUATED_CHUNK_FILES} files and "
+            f"{EVALUATED_TOTAL_CHUNKS} chunks; answers may differ from DS6."
+        )
 
     return chunks
 
