@@ -470,22 +470,91 @@ network, or share any tunnel URL privately and stop it after use.
 
 ## Adding documents to the knowledge base
 
-> **Placeholder: the RAG author is writing this section.** It will cover how
-> to turn a new PRC document into a `*_chunks.json` file, the JSON format of
-> a chunk (every field and what it is for), naming rules, and how to check
-> that the new document is retrieved.
+The first four parts below are the RAG author's method for building the
+knowledge base, as they wrote it. The last part lists what the current code
+checks when it loads the files.
 
-Facts the section must account for, from the current code:
+### Data Ingestion
 
-- `src/rag.py` loads every `*_chunks.json` file in `data/prc_chunks/`
-  (or `RAG_CHUNKS_DIR`). A file named anything else, such as
+Given that the documents are in different formats (i.e. text PDFs, scanned
+PDFs, images), utilizing ChatGPT (GPT-5.6 Thinking) is the recommended
+approach to extract structured information from the PRC documents. To ensure
+data quality, the extracted information was manually reviewed and verified
+against the original PRC documents before being incorporated into the
+knowledge base. Below is the prompt used:
+
+_"Please convert this to text verbatim."_
+
+### Chunking
+
+The documents generally follow a certain structure or pattern, and there are
+instances where documents include tables. As such, a document
+structure-based chunking strategy is the recommended approach to ensure that
+chunks are a complete, self-contained semantic unit. For cases where
+documents include tables, key-value encoding was used such that each row of
+the table is encoded as a structured key-value block. Below are recommended
+approaches for chunking documents:
+
+| Document Type | Approach |
+|---|---|
+| FAQs | Chunk by question-answer pair |
+| Operational Guidelines | Chunk by section |
+| Transition Guidelines | Chunk by section |
+| Tables | Chunk by key-value pairs |
+
+Each chunk was reviewed manually to ensure correctness, then stored as a JSON
+object in preparation for embedding and indexing. Refer to the
+[Chunk Format](#chunk-format) for the specific fields that should be
+included when building the chunk as a JSON object.
+
+### Chunk Format
+
+The knowledge base is stored as JSON objects with the fields described
+below. It is worth noting that the `charter_chunks.json` contains additional
+fields that are specific to the PRC Citizen's Charter (e.g.
+`office_division`, `standard_requirements`, `steps`, `total_fee`,
+`total_processing_time`) to capture the structure of its service entries.
+The rest of the chunks only contain the fields described below.
+
+| Field | Description |
+|---|---|
+| `chunk_id` | Unique identifier for the chunk |
+| `chunk_title` | Short heading for the chunk which can be a service name, FAQ question, resolution section, matrix activity, profession or contact department |
+| `retrieval_text` | Text that is embedded and used for matching with user query<br><br>Note: The `retrieval_text` for `charter_chunks.json` only contains the `chunk_title`, `chunk_description`, and `who_may_avail`. For the rest of the JSON objects, `retrieval_text` and `full_entry_text` are identical. |
+| `full_entry_text` | The complete text that gets passed to the LLM as context once the chunk is selected |
+| `doc_type` | Categorizes chunks as `faq`, `legal_resolution`, `cpd_matrix_entry`, `cpd_matrix_lookup`, `cpd_credit_table`, `procedural_manual`, `requirements_list`, `accreditation_form_guidance`, `contact`, `note` |
+| `source_document` | Name of the PRC document that the chunk was based on |
+| `source_url` | Link to the original PRC web page or PDF if available |
+
+### Updating Knowledge Base
+
+Once the new document is in the JSON format, add this to the
+`data/prc_chunks/` folder to be included with the other existing documents.
+This will be included in the embedding and indexing section of the pipeline
+given that the search index is built in memory.
+
+### What the code checks when it loads the files
+
+`src/rag.py` checks the folder every time the RAG stage loads, and stops
+with an error rather than guess:
+
+- It reads every file named `*_chunks.json` in `data/prc_chunks/` (or
+  `RAG_CHUNKS_DIR`). A file named anything else, such as
   `new_chunks (2).json` from a browser download, is silently skipped.
-- The loader refuses to start unless it finds exactly 13 files and 547
-  chunks (`EXPECTED_CHUNK_FILES` and `EXPECTED_TOTAL_CHUNKS` in
-  `src/rag.py`), and every `chunk_id` is unique across files. Adding a
-  document means updating both numbers in the same change.
-- The search index is built in memory from these files every time the RAG
-  stage loads, so there is no separate indexing step.
+- Each file is one JSON list of chunk objects.
+- It refuses to start unless it finds exactly 13 files and 547 chunks
+  (`EXPECTED_CHUNK_FILES` and `EXPECTED_TOTAL_CHUNKS` near the top of
+  `src/rag.py`). Adding a document means updating both numbers in the same
+  change; until then every run stops when the RAG stage loads.
+- Every `chunk_id` must be unique across all the files.
+- The code reads four fields, and every chunk needs all of them:
+  `chunk_id`, `chunk_title`, `retrieval_text` and `full_entry_text`. It
+  also reads `total_processing_time` and `total_fee` when a chunk has them
+  (the Citizen's Charter entries) and adds them to the answer prompt as the
+  official totals. Every other field is there for people and is not read by
+  the code, so a missing or extra one does not break loading.
+- To check that a new document is found, ask a question it answers and look
+  for its `chunk_id` in that turn's `chunk_ids` [output field](#output).
 - New documents are a change from the evaluated knowledge base: record them
   in `CHANGELOG.md`, and expect golden-check answers that cite them to
   differ from DS6.

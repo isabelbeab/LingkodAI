@@ -503,3 +503,35 @@ that was missed.
 under Data and models: what DS6 is, how it was made, what the `_augmented`
 file adds, where this repo uses it, and what DS7 is. The README's DS6
 mentions link to it.
+
+---
+
+## 2026-10-14 -- Knowledge-base section written by the RAG author
+
+**Issue:** "Adding documents to the knowledge base" in the README was a
+placeholder (2026-10-12 entry). The RAG author sent their write-up as a
+Word document.
+
+**Reason:** It is the RAG author's method (how documents were extracted,
+chunked, reviewed and formatted), so it goes in as they wrote it. It does
+not mention the loader's file and chunk counts. Without them, a reader who
+adds a file as described would find every run stopping when the RAG stage
+loads.
+
+**Decision:** The README section now holds the RAG author's text with
+formatting changes only:
+- Markdown headings and tables
+- field and file names in code style
+- straight quotes
+- a link to the Chunk Format part
+- the folder written as `data/prc_chunks/` (the document had
+  `/data/prc_chunks`)
+
+Under it, "What the code checks when it loads the files" keeps the loader
+facts from the placeholder, plus three more:
+- which fields `src/rag.py` actually reads
+- that each file is one JSON list
+- how to check that a new document is retrieved (its `chunk_id` in the
+  turn's `chunk_ids`)
+
+The Word file was not committed.
