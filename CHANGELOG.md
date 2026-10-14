@@ -573,3 +573,106 @@ Answers do not change. On the current 13 files the new loader returns the
 same 547 chunks in the same order as the old one (compared directly,
 2026-10-14), so the search index is built from identical input. No GPU
 re-run is needed for this change.
+
+---
+
+## 2026-10-14 -- Golden check on JOJIE after the October changes
+
+**Issue:** The last golden check on JOJIE was on 2026-09-23. Since then the
+audio LID head moved to Hugging Face (2026-10-12) and the knowledge-base
+loader changed (above), and neither had run on JOJIE.
+
+**Reason:** A re-run on the same GPU as 2026-09-23 shows whether anything
+changed the results.
+
+**Decision:** Recorded as passing. Run on `main` at `f2b8de2`, RTX 2080 Ti,
+torch 2.14.0+cu126, transformers 4.57.3. The eval assets on this JOJIE
+account were an older copy outside `outputs/eval_assets`, so they were
+fetched again with `scripts/fetch_eval_assets.py --out outputs/eval_assets`
+first. Compared with the 2026-09-23 JOJIE run:
+
+- `pytest`: 145 pass on JOJIE. The loader printed 13 files and 547 chunks,
+  with no note.
+- `final_lang`: 3/3 match (the script exits with an error otherwise; it
+  ended cleanly).
+- eng: no diffs on any field.
+- fil: no transcript or English query diffs; English and native answer
+  5/8 (`fil_01_mt_01`, `_03`, `_05`), the same count as 2026-09-23. The
+  `fil_01_mt_05` answer differs only in the capitalization of "Letter of
+  Request". The ASR drift seen on Colab for that turn did not happen here.
+- ceb: English query 4/8, English and native answer 1/8, the same counts as
+  2026-09-23, including the two known follow-ups (`ceb_01_mt_04` falls back
+  to no-match; `ceb_01_mt_07` contradicts DS6 on the processing time).
+  Transcript diffs on `ceb_01_mt_04` and `_07`, as before; the top of the
+  diff list was not in the part of the log copied back, so the exact ceb
+  transcript count was not recorded.
+- TTS: the audio was judged good by listening, apart from the Cebuano joins
+  (next entry).
+
+---
+
+## 2026-10-14 -- Cebuano speech: audible joins between pieces (known issue)
+
+**Issue:** Listening to the JOJIE run above, the TTS author noticed that in
+Cebuano answers, at every pause between sentences or lines, the voice
+changes slightly, as if the speaker resets, and the background noise
+disappears for a split second. English and Filipino answers do not do this.
+
+**Reason:** Cebuano answers go through the vendored segmenter.
+`src/tts.py`'s `_synth_ceb` generates each piece (a clause, sentence or
+list item) with its own Qwen3-TTS call, and the vendored
+`ceb_segmentation.concat_segments` joins them with pauses of pure digital
+silence (`np.zeros`): 0.20 s after a clause, 0.45 s after a sentence,
+0.60 s after a list item. Each call imitates the reference voice
+separately, with its own random variation (no seed is set; see
+2026-09-29), and the silent pauses have none of the faint background noise
+in the generated speech. English and Filipino answers are generated in one
+call. This is how the synthesis notebook's `synthesize()` made the
+evaluated DS7 audio. A similar voice shift between pieces was reported in
+August with the earlier VITS model; `ceb_segmentation.py`'s `voice_seed`
+note records it.
+
+**Decision:** Kept as is, and listed as a known issue in the README
+(Testing). Two possible fixes, both changes from the evaluated audio and so
+the TTS author's decision, not made here:
+- fill the pauses with low-level background noise taken from the generated
+  speech, or overlap the pieces with a short crossfade, inside
+  `src/tts.py` (the vendored files are not edited)
+- reset the random seed to the same value before every piece, as the
+  vendored `voice_seed` option does; its own note calls it an untested
+  hypothesis, written for the earlier model
+
+Either needs a GPU run and listening before it could replace the current
+behaviour.
+
+---
+
+## 2026-10-14 -- README: instructions for JOJIE
+
+**Issue:** The TTS author asked whether a teammate following the README on
+JOJIE would succeed. The commands were right, but steps JOJIE needs were
+missing or only in the golden-check section:
+- nano crashes in JOJIE's terminal, and there is no `sudo` for
+  `apt install`
+- `PYTHONNOUSERSITE=1` was not mentioned anywhere, and
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, `nohup` and the
+  `nvidia-smi` check only for the golden check
+- "Start here" step 2 shows venv, without saying JOJIE uses the conda
+  environment
+- step 4 did not say to leave out the `export` the setup scripts print
+- the GTX 1080 Ti was listed as if it worked, though only the RTX 2080 Ti
+  has run the pipeline
+
+**Reason:** Checked on JOJIE on 2026-10-14: `ffmpeg` is installed for
+everyone, `sox` is not (it was conda-installed into `lingkod-e2e`), home
+folders share one drive that was 97% full (876 GB free), and JupyterLab's
+File > Open from Path... can open the hidden `.env`.
+
+**Decision:** "Start here" gains an "On JOJIE" section with those
+differences in step order (conda, `sox` through conda, disk check, editing
+`.env`, what to set in every new terminal, `nohup` for long runs) and a
+JOJIE row in the routes table. Elsewhere: step 4 says to drop `export`;
+every new terminal sets `PYTORCH_CUDA_ALLOC_CONF` (the GPU Docker image and
+the Colab notebooks already do); the system-packages notes give the conda
+install for machines without `sudo`; the GTX 1080 Ti is marked untested;
+the golden check gives a command that prints just its results.

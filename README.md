@@ -18,7 +18,7 @@ decisions that took discussion, in the order they were made.
 ## Contents
 
 - [Pipeline stages](#pipeline-stages) and [This repo contains](#this-repo-contains)
-- [IMPORTANT: Start here](#important-start-here)
+- [IMPORTANT: Start here](#important-start-here), including [On JOJIE](#on-jojie)
 - [Running your own recordings (`input/` and `output/`)](#running-your-own-recordings-input-and-output)
 - [Configure: the `.env` file](#configure-the-env-file)
 - [Data and models](#data-and-models)
@@ -84,23 +84,77 @@ drop them in `input/` and run `scripts/run_folder.py`; the results appear in
 | **Colab: your recordings** | A Google account with a GPU runtime, and a Hugging Face token (below) | Run your own recordings with no local setup: open `notebooks/colab_run_folder.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_run_folder.ipynb)), choose an L4 GPU, add the token as a Colab Secret named `HF_TOKEN`, put recordings in the Google Drive folder `lingkodai_input`, and run the cells. Results land in the Drive folder `lingkodai_output` |
 | **Colab: evaluated results** | The same | Reproduce the evaluated results: open `notebooks/colab_golden_check.ipynb` ([link](https://colab.research.google.com/github/isabelbeab/LingkodAI/blob/main/notebooks/colab_golden_check.ipynb)) the same way and run the cells |
 | **Your own GPU machine** | Everything in "Requirements" below | Run the pipeline on your own audio, or call it from other software |
+| **JOJIE** | A JOJIE account and the Hugging Face token | The same as your own GPU machine, with the differences under [On JOJIE](#on-jojie) |
 | **CPU demo only** | Docker, or Python 3.12 | Show recorded conversations and the live text frontend, with no GPU or token. See [Running the CPU demo locally](#running-the-cpu-demo-locally) |
 
 ### Requirements (What you need)
 
 - Linux with an NVIDIA GPU of **11 GB or more** and a working driver
   (`nvidia-smi` shows the card). The pipeline was verified on an RTX 2080 Ti
-  (11 GB) and an L4 (24 GB).
+  (11 GB) and an L4 (24 GB); other cards are untested.
 - About **60 GB of free disk**: roughly 45 GB of model weights download on
   the first run, plus the Python environment.
 - `git`, Python **3.12** (conda or venv), and the system packages `ffmpeg`
-  and `sox` (`sudo apt install ffmpeg sox` on Debian or Ubuntu).
+  and `sox` (`sudo apt install ffmpeg sox` on Debian or Ubuntu; without
+  `sudo`, `conda install -c conda-forge ffmpeg sox` into a conda
+  environment).
 - **Membership in the `lingkodai` Hugging Face org** and a token from your own
   account. Create it at huggingface.co > Settings > Access Tokens >
   Fine-grained, with read access to these repos only:
   `lingkodai/lingkodai-whisper-ceb`, `lingkodai/lingkodai-whisper-fil`,
   `lingkodai/lingkodai-whisper-eng`, `lingkodai/lingkodai-audio-lid-head`
   and `lingkodai/lingkodai-eval-assets`.
+
+### On JOJIE
+
+JOJIE is a shared JupyterHub: no `sudo`, no Docker, a GPU and a disk shared
+with other users, and terminals that can disconnect during a long run. The
+steps below need these changes there. They come from the team's own JOJIE
+setup, checked on 2026-10-14; a new account following them from scratch
+has not been tried.
+
+- **Step 2: use the conda environment, not venv.** Build `lingkod-e2e` as
+  shown under [Setting up the GPU pipeline](#setting-up-the-gpu-pipeline).
+  The pipeline has only run on JOJIE's RTX 2080 Ti (`sm_75`); the GTX 1080
+  Ti (`sm_61`) is untested.
+- **System packages, without `sudo`.** `ffmpeg` is already installed for
+  everyone. `sox` is not: with `lingkod-e2e` active, run
+  `conda install -c conda-forge sox -y`. Afterwards `which ffmpeg sox`
+  should print two paths.
+- **Disk.** Home folders are on one drive shared by every JOJIE user (on
+  2026-10-14 it was 97% full, with 876 GB free). Check `df -h ~` before the
+  first run, which downloads about 45 GB of models.
+- **Step 3: edit `.env` in JupyterLab, not nano.** nano crashes in JOJIE's
+  terminal. JupyterLab's file browser hides names that start with a dot, so
+  use File > Open from Path... and type the path to `.env`, for example
+  `LingkodAI/.env` if you cloned into the folder the file browser opens in.
+  Save with Ctrl+S.
+- **Every new terminal**, before running anything:
+
+  ```bash
+  conda activate lingkod-e2e
+  cd LingkodAI                       # your clone
+  set -a; source .env; set +a
+  export PYTHONNOUSERSITE=1
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  nvidia-smi                         # GPU memory in use should be near 0 MiB
+  ```
+
+  `PYTHONNOUSERSITE=1` stops Python from also loading packages from
+  `~/.local`, where an earlier `pip install --user` may have left a
+  different torch or transformers than the pinned ones. If `nvidia-smi`
+  shows memory already in use, another process holds the GPU (possibly
+  your own earlier run) and the pipeline will likely run out of memory.
+- **Start long runs with `nohup`**, so they keep going if the terminal
+  disconnects: the first run (it downloads the models), `run_folder.py`
+  and the golden check. For example:
+
+  ```bash
+  nohup python scripts/run_folder.py > run_folder.log 2>&1 &
+  tail -f run_folder.log             # Ctrl+C stops watching, not the run
+  ```
+
+  The end of the log shows whether it finished or why it stopped.
 
 ### Step by step process
 
@@ -134,8 +188,10 @@ drop them in `input/` and run `scripts/run_folder.py`; the results appear in
    ```
 
 4. **Run the two one-time setup scripts.** Each prints lines to add to
-   `.env`; add them, then load `.env` again. Why they exist is explained
-   under [Setting up the GPU pipeline](#setting-up-the-gpu-pipeline).
+   `.env`. They are printed as `export ASR_CEB=...` and so on; write them in
+   `.env` without the word `export` (as `ASR_CEB=...`), then load `.env`
+   again. Why the scripts exist is explained under
+   [Setting up the GPU pipeline](#setting-up-the-gpu-pipeline).
 
    ```bash
    python scripts/patch_asr_tokenizers.py --out outputs/asr_patched   # prints the ASR_CEB, ASR_FIL, ASR_ENG lines
@@ -162,7 +218,10 @@ drop them in `input/` and run `scripts/run_folder.py`; the results appear in
 
 In every new terminal, run `source .venv/bin/activate` (or
 `conda activate lingkod-e2e`) and `set -a; source .env; set +a` again before
-running anything.
+running anything. Also run `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`,
+which lets PyTorch reuse freed GPU memory better as the stages load and free
+their models (the GPU Docker image and the Colab notebooks set it already).
+On JOJIE, use the full list under [On JOJIE](#on-jojie).
 
 ## Running your own recordings (`input/` and `output/`)
 
@@ -636,7 +695,10 @@ The pip extras, defined in `pyproject.toml`:
 System packages: the full pipeline also needs `ffmpeg` on `PATH`
 (`src/audio.py` shells out to it to resample every input to 16 kHz mono) and
 `sox` (`qwen_tts` warns on import without it). On Debian or Ubuntu:
-`sudo apt install ffmpeg sox`. `docker/Dockerfile.gpu` installs both.
+`sudo apt install ffmpeg sox`. Without `sudo`, install whichever is missing
+into the conda environment, for example `conda install -c conda-forge sox`
+(on JOJIE, `ffmpeg` is already installed and only `sox` is needed).
+`docker/Dockerfile.gpu` installs both.
 
 ### Setting up the GPU pipeline
 
@@ -653,10 +715,11 @@ python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list())"
 ```
 
 The last line must list the card's architecture (`sm_61` for a GTX 1080 Ti,
-`sm_75` for an RTX 2080 Ti). The verified JOJIE runs used torch
-2.14.0+cu126 with transformers 4.57.3. On a new terminal, run
-`conda activate lingkod-e2e` again and check the prompt shows it before
-launching anything.
+`sm_75` for an RTX 2080 Ti). The verified JOJIE runs used an RTX 2080 Ti
+with torch 2.14.0+cu126 and transformers 4.57.3; the GTX 1080 Ti has never
+run the pipeline. On a new terminal, run `conda activate lingkod-e2e` again
+and check the prompt shows it before launching anything (on JOJIE, run the
+full list under [On JOJIE](#on-jojie)).
 
 Then two one-time steps, both needing `HF_TOKEN` in the environment (see
 `.env.example` for what the token must be able to read):
@@ -741,9 +804,18 @@ decoding can shift slightly across GPUs and library versions. A diff is
 meant to be read by a person. TTS audio is judged by listening, not compared
 by the script.
 
-It takes a while (every model loads once per language). On a shared machine,
-launch it with `nohup ... > golden.log 2>&1 &` after checking `nvidia-smi`,
-with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set.
+It takes a while (every model loads once per language). On a shared machine
+such as JOJIE, set up the terminal as under [On JOJIE](#on-jojie), then put
+`nohup` before `python scripts/golden_check.py` and `> golden.log 2>&1 &`
+after the last argument. When it ends, this prints just the results, without
+the diffs:
+
+```bash
+sed -n '/=== final_lang ===/,/=== diffs ===/p' golden.log
+```
+
+If `final_lang` does not match, the script ends with an error and the last
+lines of the log say so.
 
 Without JOJIE, `notebooks/colab_golden_check.ipynb` runs the same golden
 check on a Colab GPU (L4 preferred; a T4 is untested but has more memory
@@ -761,12 +833,23 @@ audio). The turn's text answer is unaffected. It happened once in 24 turns
 on Colab and was not noticed in the JOJIE runs; see `CHANGELOG.md`,
 2026-09-29.
 
+Known issue, Cebuano audio only: at each pause between clauses, sentences
+or list items, the voice shifts slightly and the faint background noise
+drops out for a moment. Cebuano answers are split into those pieces and
+each piece is generated separately (`_synth_ceb` in `src/tts.py`). Each
+generation imitates the reference voice afresh, with its own random
+variation, and the vendored `concat_segments` joins the pieces with pure
+digital silence: 0.20 s after a clause, 0.45 s after a sentence, 0.60 s
+after a list item. English and Filipino answers are generated in one piece,
+so they do not have it. The evaluated DS7 audio was made the same way, so
+it is kept; see `CHANGELOG.md`, 2026-10-14.
+
 ### What has been verified, and how
 
 | What | How | Where and when | Result |
 |---|---|---|---|
 | Every stage's code | The `pytest` suite, CPU, fake models | Before every merge; GitHub Actions from 2026-10-12 | All pass |
-| Full pipeline with the real models | Golden check against DS6 | JOJIE (conda, RTX 2080 Ti): 2026-09-22 and 09-23. Colab (L4): 2026-09-29 | `final_lang` 3/3; text diffs read and recorded in `CHANGELOG.md`; TTS 24/24 synthesized, one runaway (above) |
+| Full pipeline with the real models | Golden check against DS6 | JOJIE (conda, RTX 2080 Ti): 2026-09-22, 09-23 and 10-14. Colab (L4): 2026-09-29 | `final_lang` 3/3 from 09-23 on (09-22 led to the routing fix in `CHANGELOG.md`); text diffs read and recorded in `CHANGELOG.md`. TTS: Colab 24/24 synthesized, one runaway; JOJIE 10-14 judged good by listening, apart from the Cebuano joins (both known issues above) |
 | ASR checkpoints in the `lingkodai` org | Transcripts compared with the original checkpoints, 24 clips | JOJIE, 2026-09-29 | 24/24 identical |
 | Private eval assets | Every file checked against `MANIFEST.sha256` | JOJIE and Colab, 2026-09-29 | 28/28 match |
 | CPU image | Built and started; page served | Locally, 2026-09-22 and 09-28; GitHub Actions from 2026-10-12 | Works |
